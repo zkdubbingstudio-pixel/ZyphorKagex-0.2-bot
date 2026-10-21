@@ -1,23 +1,11 @@
 import os
 import requests
-from flask import Flask
+from flask import Flask, request
 
-# --- FLASK SERVER SETUP (Render keep-alive ke liye) ---
-web_app = Flask(__name__)
+app = Flask(__name__)
 
-@web_app.route('/')
-def health_check():
-    return "Kitsu Bot is Alive & Running smoothly via HTTP API!", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    print(f"🌐 Starting Flask server on port {port}...")
-    web_app.run(host="0.0.0.0", port=port)
-
-# ==================== CONFIGURATION ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI2c")
 WEB_APP_DOMAIN = os.getenv("WEB_APP_DOMAIN", "https://zyphorkagex.onrender.com")
-# =======================================================
 
 def send_telegram_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -28,32 +16,30 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    
     requests.post(url, json=payload)
 
-# Webhook route jo Telegram se messages receive karega bina kisi event loop error ke!
-@web_app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def telegram_webhook():
-    from flask import request
+@app.route('/', methods=['GET'])
+def home():
+    return "Kitsu Bot Serverless is Active!", 200
+
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
     update = request.get_json()
     
     if "message" in update:
-        message = update["message"]
-        chat_id = message["chat"]["id"]
-        user_id = message["from"]["id"]
-        text = message.get("text", "")
+        msg = update["message"]
+        chat_id = msg["chat"]["id"]
+        user_id = msg["from"]["id"]
+        text = msg.get("text", "")
         
         parts = text.split()
         
-        # 1. Normal /start command
         if len(parts) == 1 and parts[0] == "/start":
             send_telegram_message(
                 chat_id,
                 "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Bot!**\n\n"
                 "Channel par di gayi episode links par click karke aap direct anime stream kar sakte hain."
             )
-        
-        # 2. Deep-link watch parameter
         elif len(parts) > 1 and parts[1].startswith("ep_"):
             episode_id = parts[1].replace("ep_", "")
             try:
@@ -78,28 +64,12 @@ def telegram_webhook():
                     send_telegram_message(
                         chat_id,
                         "🎬 **Kitsu Player Ready!**\n\n"
-                        "Neeche diye gaye button par click karke anime dekhein.\n\n"
-                        "🔒 **Security Rules:**\n"
-                        "• Yeh link sirf **2 baar** khol sakte hain.\n"
-                        "• Yeh message secure hai!",
+                        "Neeche diye gaye button par click karke anime dekhein.",
                         reply_markup=keyboard
                     )
                 else:
-                    send_telegram_message(chat_id, "❌ Episode token generate karne mein error aaya ya session expire ho gaya.")
+                    send_telegram_message(chat_id, "❌ Token generate karne mein error aaya.")
             except Exception:
-                send_telegram_message(chat_id, "❌ Web server se connect karne mein issue aaya.")
+                send_telegram_message(chat_id, "❌ Web server connect nahi ho paya.")
 
     return "OK", 200
-
-if __name__ == "__main__":
-    # Telegram ko Webhook URL set karna automatically
-    webhook_url = f"{WEB_APP_DOMAIN}/{BOT_TOKEN}"
-    set_webhook_api = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={webhook_url}"
-    try:
-        requests.get(set_webhook_api, timeout=10)
-        print("🔗 Telegram Webhook Set Successfully!")
-    except Exception as e:
-        print(f"⚠️ Could not set webhook automatically: {e}")
-
-    # Flask server run karega jo bot aur web dono sambhal lega
-    run_flask()
