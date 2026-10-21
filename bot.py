@@ -26,13 +26,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI
 WEB_APP_DOMAIN = os.getenv("WEB_APP_DOMAIN", "https://zyphorkagex.onrender.com")
 # =======================================================
 
-# Session ko in-memory / temp directory mein store karne ke liye
 bot = Client(
     "Kitsu_Dubbing_Bot", 
     api_id=API_ID, 
     api_hash=API_HASH, 
     bot_token=BOT_TOKEN,
-    workdir="/tmp"  # Render writable temp workspace
+    workdir="/tmp"
 )
 
 @bot.on_message(filters.command("start"))
@@ -93,12 +92,16 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-if __name__ == "__main__":
-    # 1. Flask server in background thread
+async def main():
+    # Flask Server ko Background Thread mein start karna
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    # 2. Pyrogram Bot Run
-    print("🦊 Kitsu Bot Status: Starting...")
-    bot.run()
+    print("🦊 Kitsu Bot Status: Starting Async Loop...")
+    await bot.start()
+    print("🚀 Kitsu Bot is Live & Listening for Messages!")
+    await asyncio.Event().wait()  # Bot ko continuously active rakhne ke liye
+
+if __name__ == "__main__":
+    asyncio.run(main())
