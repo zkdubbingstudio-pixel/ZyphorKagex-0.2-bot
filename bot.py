@@ -6,15 +6,15 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK SERVER SETUP (Fly.io port 8080 bind ke liye) ---
+# --- FLASK SERVER SETUP (Render keep-alive ke liye) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def health_check():
-    return "Kitsu Bot is Alive & Running on Fly.io!", 200
+    return "Kitsu Bot is Alive & Running!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Starting Flask server on port {port}...")
     web_app.run(host="0.0.0.0", port=port)
 
@@ -91,5 +91,5 @@ if __name__ == "__main__":
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot Status: Starting on Fly.io...")
+    print("🦊 Kitsu Bot Status: Starting...")
     bot.run()
