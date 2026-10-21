@@ -3,8 +3,8 @@ import asyncio
 import requests
 from threading import Thread
 from flask import Flask
-from pyrofork import Client, filters
-from pyrofork.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # --- FLASK SERVER SETUP (Render Web Service ke liye) ---
 web_app = Flask(__name__)
