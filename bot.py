@@ -3,10 +3,10 @@ import asyncio
 import requests
 from threading import Thread
 from flask import Flask
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from pyrofork import Client, filters
+from pyrofork.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK SERVER SETUP (Render Web Service bind ke liye) ---
+# --- FLASK SERVER SETUP (Render Web Service ke liye) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -92,29 +92,12 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-# Main Runner function
-async def main():
-    # Background Flask Thread
+
+if __name__ == "__main__":
+    # Flask Server ko Background Thread mein start karna
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot: Starting Pyrogram Client...")
-    await bot.start()
-    
-    # Webhook clear check
-    try:
-        await bot.invoke(pyrogram.raw.functions.account.DeleteAccount())
-    except Exception:
-        pass
-
-    me = await bot.get_me()
-    print(f"🚀 Kitsu Bot (@{me.username}) is Live & Ready to receive messages!")
-    
-    # Idle loop
-    await asyncio.Event().wait()
-
-if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
+    print("🦊 Kitsu Bot Status: Starting...")
+    bot.run()
