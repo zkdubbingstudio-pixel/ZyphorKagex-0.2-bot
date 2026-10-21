@@ -6,15 +6,15 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK SERVER SETUP (Render Web Service ke liye) ---
+# --- FLASK SERVER SETUP (Fly.io port 8080 bind ke liye) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def health_check():
-    return "Kitsu Bot is Alive & Running!", 200
+    return "Kitsu Bot is Alive & Running on Fly.io!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     print(f"🌐 Starting Flask server on port {port}...")
     web_app.run(host="0.0.0.0", port=port)
 
@@ -39,7 +39,6 @@ async def start_handler(client, message):
     text = message.text.split()
     user_id = message.from_user.id
 
-    # 1. Normal /start Command
     if len(text) == 1:
         await message.reply_text(
             "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Bot!**\n\n"
@@ -47,15 +46,12 @@ async def start_handler(client, message):
         )
         return
 
-    # Deep-link parameter
     param = text[1]
 
-    # 2. Episode Watch Link Generation
     if param.startswith("ep_"):
         episode_id = param.replace("ep_", "")
 
         try:
-            # Backend se single-user, 2-view, 5-min token fetch karein
             api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
             res = requests.get(api_url, timeout=10).json()
 
@@ -63,7 +59,6 @@ async def start_handler(client, message):
                 token = res.get("token")
                 watch_url = f"{WEB_APP_DOMAIN}/watch?id={episode_id}&token={token}"
 
-                # Send Web App Mini-App Streaming Button
                 sent_msg = await message.reply_text(
                     "🎬 **Kitsu Player Ready!**\n\n"
                     "Neeche diye gaye button par click karke anime dekhein.\n\n"
@@ -80,7 +75,6 @@ async def start_handler(client, message):
                     ])
                 )
 
-                # Wait for 5 minutes (300 seconds) and then auto-delete message
                 await asyncio.sleep(300)
                 try:
                     await sent_msg.delete()
@@ -92,12 +86,10 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-
 if __name__ == "__main__":
-    # Flask Server ko Background Thread mein start karna
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot Status: Starting...")
+    print("🦊 Kitsu Bot Status: Starting on Fly.io...")
     bot.run()
