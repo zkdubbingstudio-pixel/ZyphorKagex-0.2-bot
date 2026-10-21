@@ -6,7 +6,7 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK SERVER SETUP (Render keep-alive ke liye) ---
+# --- FLASK SERVER SETUP ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -86,10 +86,18 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-if __name__ == "__main__":
+async def main():
+    # Flask Server ko Background Thread mein start karna
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot Status: Starting...")
-    bot.run()
+    print("🦊 Kitsu Bot Status: Starting Async Client...")
+    await bot.start()
+    print("🚀 Kitsu Bot is Live & Listening!")
+    
+    # Keep the event loop running forever
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
