@@ -6,7 +6,7 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK SERVER SETUP (Render Web Service ke liye) ---
+# --- FLASK SERVER SETUP (Render Web Service bind ke liye) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -92,18 +92,26 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-# Main Runner function for Python 3.14 Async Loop
+# Main Runner function
 async def main():
     # Background Flask Thread
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot Status: Starting Async Client...")
+    print("🦊 Kitsu Bot: Starting Pyrogram Client...")
     await bot.start()
-    print("🚀 Kitsu Bot is Live & Listening!")
     
-    # Keep running forever
+    # Webhook clear check
+    try:
+        await bot.invoke(pyrogram.raw.functions.account.DeleteAccount())
+    except Exception:
+        pass
+
+    me = await bot.get_me()
+    print(f"🚀 Kitsu Bot (@{me.username}) is Live & Ready to receive messages!")
+    
+    # Idle loop
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
