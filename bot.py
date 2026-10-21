@@ -1,0 +1,76 @@
+import asyncio
+import requests
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+
+# ==================== CONFIGURATION ====================
+API_ID = 38215355
+API_HASH = "3f095c170be8c744b8f3d7f9c75ae544"
+BOT_TOKEN = "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI2c"
+
+WEB_APP_DOMAIN = "https://zyphorkagex.onrender.com"
+# =======================================================
+
+bot = Client("Kitsu_Dubbing_Bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+@bot.on_message(filters.command("start"))
+async def start_handler(client, message):
+    text = message.text.split()
+    user_id = message.from_user.id
+
+    # 1. Normal /start Command
+    if len(text) == 1:
+        await message.reply_text(
+            "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Bot!**\n\n"
+            "Channel par di gayi episode links par click karke aap direct anime stream kar sakte hain."
+        )
+        return
+
+    # Deep-link parameter
+    param = text[1]
+
+    # 2. Episode Watch Link Generation
+    if param.startswith("ep_"):
+        episode_id = param.replace("ep_", "")
+
+        try:
+            # Backend se single-user, 2-view, 5-min token fetch karein
+            api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
+            res = requests.get(api_url, timeout=10).json()
+
+            if res.get("success"):
+                token = res.get("token")
+                watch_url = f"{WEB_APP_DOMAIN}/watch?id={episode_id}&token={token}"
+
+                # Send Web App Mini-App Streaming Button
+                sent_msg = await message.reply_text(
+                    "🎬 **Kitsu Player Ready!**\n\n"
+                    "Neeche diye gaye button par click karke anime dekhein.\n\n"
+                    "🔒 **Security Rules:**\n"
+                    "• Yeh link sirf **2 baar** khol sakte hain.\n"
+                    "• Yeh message **5 minute** mein automatically delete ho jayega!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                "▶️ Watch Anime Now (Kitsu Player)",
+                                web_app=WebAppInfo(url=watch_url)
+                            )
+                        ]
+                    ])
+                )
+
+                # Wait for 5 minutes (300 seconds) and then auto-delete message
+                await asyncio.sleep(300)
+                try:
+                    await sent_msg.delete()
+                except Exception:
+                    pass
+            else:
+                await message.reply_text("❌ Episode token generate karne mein error aaya ya session expire ho gaya.")
+
+        except Exception as e:
+            await message.reply_text("❌ Web server se connect karne mein issue aaya.")
+
+
+print("🦊 Kitsu Bot Status: Running...")
+bot.run()
