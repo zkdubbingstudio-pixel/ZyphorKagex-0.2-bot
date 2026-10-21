@@ -1,7 +1,21 @@
+import os
 import asyncio
 import requests
+from threading import Thread
+from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+
+# --- FLASK DUMMY SERVER (Render Free Web Service ke liye) ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Kitsu Bot is Alive & Running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
 
 # ==================== CONFIGURATION ====================
 API_ID = 38215355
@@ -72,5 +86,11 @@ async def start_handler(client, message):
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
 
-print("🦊 Kitsu Bot Status: Running...")
-bot.run()
+if __name__ == "__main__":
+    # Start Flask Server in Background Thread
+    server_thread = Thread(target=run_flask)
+    server_thread.daemon = True
+    server_thread.start()
+
+    print("🦊 Kitsu Bot Status: Running...")
+    bot.run()
