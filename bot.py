@@ -6,26 +6,34 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
-# --- FLASK DUMMY SERVER (Render Free Web Service ke liye) ---
+# --- FLASK SERVER SETUP (Render Web Service bind ke liye) ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
-def home():
-    return "Kitsu Bot is Alive & Running!"
+def health_check():
+    return "Kitsu Bot is Alive & Running!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🌐 Starting Flask server on port {port}...")
     web_app.run(host="0.0.0.0", port=port)
 
 # ==================== CONFIGURATION ====================
-API_ID = 38215355
-API_HASH = "3f095c170be8c744b8f3d7f9c75ae544"
-BOT_TOKEN = "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI2c"
+API_ID = int(os.getenv("API_ID", "38215355"))
+API_HASH = os.getenv("API_HASH", "3f095c170be8c744b8f3d7f9c75ae544")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI2c")
 
-WEB_APP_DOMAIN = "https://zyphorkagex.onrender.com"
+WEB_APP_DOMAIN = os.getenv("WEB_APP_DOMAIN", "https://zyphorkagex.onrender.com")
 # =======================================================
 
-bot = Client("Kitsu_Dubbing_Bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# Session ko in-memory / temp directory mein store karne ke liye
+bot = Client(
+    "Kitsu_Dubbing_Bot", 
+    api_id=API_ID, 
+    api_hash=API_HASH, 
+    bot_token=BOT_TOKEN,
+    workdir="/tmp"  # Render writable temp workspace
+)
 
 @bot.on_message(filters.command("start"))
 async def start_handler(client, message):
@@ -85,12 +93,12 @@ async def start_handler(client, message):
         except Exception as e:
             await message.reply_text("❌ Web server se connect karne mein issue aaya.")
 
-
 if __name__ == "__main__":
-    # Start Flask Server in Background Thread
+    # 1. Flask server in background thread
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    print("🦊 Kitsu Bot Status: Running...")
+    # 2. Pyrogram Bot Run
+    print("🦊 Kitsu Bot Status: Starting...")
     bot.run()
