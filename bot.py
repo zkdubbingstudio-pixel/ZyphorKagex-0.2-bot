@@ -71,14 +71,24 @@ def webhook():
 
             target_episode_id = None
             
-            # Deep link /start ep_xxxx check
-            if len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
+            # Smart Episode ID Extractor (Handles deep links, pasted URLs, and raw text)
+            if "start=ep_" in full_text:
+                try:
+                    sub = full_text.split("start=")[1]
+                    target_episode_id = sub.split()[0].split("&")[0]
+                except:
+                    pass
+            elif len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
                 target_episode_id = parts[1]
             else:
                 for part in parts:
-                    if part.startswith("ep_"):
-                        target_episode_id = part
-                        break
+                    if "ep_" in part:
+                        idx = part.find("ep_")
+                        candidate = part[idx:]
+                        clean_id = "".join([c for c in candidate if c.isalnum() or c == '_'])
+                        if clean_id.startswith("ep_"):
+                            target_episode_id = clean_id
+                            break
 
             if target_episode_id:
                 # Force join check
@@ -94,7 +104,7 @@ def webhook():
                     send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
-                # Fast token request to Render backend
+                # Request token from Render backend
                 try:
                     api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
                     res = requests.get(api_url, timeout=8).json()
