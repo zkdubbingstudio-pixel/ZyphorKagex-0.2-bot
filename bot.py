@@ -28,8 +28,8 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         return res["result"]["message_id"]
     return None
 
-def delete_telegram_message(chat_id, message_id, delay=300):
-    """5 Minutes (300 Seconds) Baad Message Delete Karne Ke Liye Thread"""
+def delete_telegram_message(chat_id, message_id, delay=600):
+    """10 Minutes Baad Message Delete Karne Ke Liye Thread"""
     def delayed_delete():
         time.sleep(delay)
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
@@ -55,7 +55,6 @@ def handle_episode_request(chat_id, user_id, episode_id):
 
         if res.get("success"):
             token = res.get("token")
-            # Dynamic player link with temporary token
             watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
 
             keyboard = {
@@ -71,17 +70,16 @@ def handle_episode_request(chat_id, user_id, episode_id):
 
             msg_text = (
                 "🎬 **Kitsu Player Ready!**\n\n"
-                "⚠️ *Note: Yeh link sirf 2 baar use ki ja sakti hai aur 5 minute mein automatic delete ho jayegi!*"
+                "⚠️ *Note: Yeh link secure hai aur kuch samay baad automatic expire/delete ho jayegi.*"
             )
             
             msg_id = send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
             
-            # Auto-delete timer trigger (300 seconds = 5 mins)
             if msg_id:
-                delete_telegram_message(chat_id, msg_id, delay=300)
+                delete_telegram_message(chat_id, msg_id, delay=600)
 
         else:
-            send_telegram_message(chat_id, f"❌ Episode nahi mila ya error: {res.get('message', 'Unknown')}")
+            send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
     except Exception as e:
         send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
@@ -98,11 +96,13 @@ def webhook():
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         text = msg.get("text", "").strip()
+        caption = msg.get("caption", "").strip()
         
-        parts = text.split()
+        full_text = text if text else caption
+        parts = full_text.split()
 
         # Admin Link Generator Command
-        if text.startswith("/getlink"):
+        if full_text.startswith("/getlink"):
             if len(parts) > 1:
                 ep_id = parts[1]
                 channel_post_link = f"https://t.me/{BOT_USERNAME}?start={ep_id}"
@@ -115,27 +115,37 @@ def webhook():
             return "OK", 200
 
         target_episode_id = None
-        if len(parts) > 1 and parts[1].startswith("ep_"):
+        
+        # Check if deep link format like /start ep_xxxx
+        if len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
             target_episode_id = parts[1]
-        elif text.startswith("ep_"):
-            target_episode_id = text
+        # Check if direct episode text or forwarded text like ep_xxxx
+        elif full_text.startswith("ep_"):
+            target_episode_id = full_text.split()[0]
+        elif len(parts) > 0 and parts[0].startswith("ep_"):
+            target_episode_id = parts[0]
             
-        # Force Join Check
-        if not is_user_member(user_id, CHANNEL_1):
-            retry_param = f"?start={target_episode_id}" if target_episode_id else ""
-            join_keyboard = {
-                "inline_keyboard": [
-                    [{"text": "📢 Join ZK Dubbing Studio", "url": "https://t.me/zk_dubbing_studio"}],
-                    [{"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}],
-                    [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
-                ]
-            }
-            send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
+        # Force Join Check (If target episode is requested)
+        if target_episode_id:
+            if not is_user_member(user_id, CHANNEL_1):
+                retry_param = f"?start={target_episode_id}"
+                join_keyboard = {
+                    "inline_keyboard": [
+                        [{"text": "📢 Join ZK Dubbing Studio", "url": "https://t.me/zk_dubbing_studio"}],
+                        [{"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}],
+                        [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
+                    ]
+                }
+                send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
+                return "OK", 200
+
+            handle_episode_request(chat_id, user_id, target_episode_id)
             return "OK", 200
 
-        if text == "/start" or (len(parts) == 1 and parts[0] == "/start"):
-            send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**")
-        elif target_episode_id:
-            handle_episode_request(chat_id, user_id, target_episode_id)
+        if full_text == "/start" or (len(parts) == 1 and parts[0] == "/start"):
+            send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\nAapko anime episodes ke liye channel par di gayi links par click karna hoga.")
 
     return "OK", 200
+
+if __name__ == "__main__":
+    app.run(port=5000)
