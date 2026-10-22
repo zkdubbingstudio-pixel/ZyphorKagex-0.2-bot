@@ -10,10 +10,7 @@ WEB_APP_DOMAIN = os.getenv("WEB_APP_DOMAIN", "https://zyphorkagex.onrender.com")
 # Channel Usernames / IDs
 CHANNEL_1 = "@zk_dubbing_studio"
 CHANNEL_2_LINK = "https://t.me/+H3TykxfXuwdlODNl"  # Private link button ke liye
-
-# Private channel ka Telegram ID (Agar -100123456789 jaisa ID pata ho toh yahan daalein, warna username)
-# Note: Private channel ke verification ke liye bot ka Admin hona zaroori hai.
-CHANNEL_2_ID = "-100123456789"  # <-- Apne backup channel ka Chat ID yahan dalein agar pata ho, warna username/ID use karein
+CHANNEL_2_ID = "-100123456789"  # Backup channel ID
 
 def send_telegram_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -37,7 +34,39 @@ def is_user_member(user_id, channel_id):
             return status in ["creator", "administrator", "member"]
     except Exception as e:
         print(f"Member check error: {e}")
-    return True # Fail-safe: agar check na ho paaye toh block na kare
+    return True # Fail-safe
+
+def handle_episode_request(chat_id, user_id, episode_id):
+    """Episode ID ke liye watch link aur button generate karta hai"""
+    try:
+        api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
+        res = requests.get(api_url, timeout=10).json()
+
+        if res.get("success"):
+            token = res.get("token")
+            watch_url = f"{WEB_APP_DOMAIN}/watch.html?id={episode_id}&token={token}"
+
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "▶️ Watch Anime Now (Kitsu Player)",
+                            "web_app": {"url": watch_url}
+                        }
+                    ]
+                ]
+            }
+
+            send_telegram_message(
+                chat_id,
+                "🎬 **Kitsu Player Ready!**\n\n"
+                "Neeche diye gaye button par click karke anime dekhein.",
+                reply_markup=keyboard
+            )
+        else:
+            send_telegram_message(chat_id, f"❌ Episode nahi mila ya error hai: {res.get('message', 'Unknown')}")
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
 @app.route('/', methods=['GET'])
 def home():
@@ -51,15 +80,23 @@ def webhook():
         msg = update["message"]
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
-        text = msg.get("text", "")
+        text = msg.get("text", "").strip()
         
         parts = text.split()
         
+        # Determine karna ki user kya bhej raha hai (Episode ID extract karne ke liye)
+        target_episode_id = None
+        if len(parts) > 1 and parts[1].startswith("ep_"):
+            target_episode_id = parts[1]
+        elif text.startswith("ep_"):
+            target_episode_id = text
+            
         # Check Force Join (Pehle Main Channel Check Karte Hain)
         is_sub_1 = is_user_member(user_id, CHANNEL_1)
         
         # Agar user channel mein nahi hai:
         if not is_sub_1:
+            retry_param = f"?start={target_episode_id}" if target_episode_id else ""
             join_keyboard = {
                 "inline_keyboard": [
                     [
@@ -69,7 +106,7 @@ def webhook():
                         {"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}
                     ],
                     [
-                        {"text": "🔄 Joined / Try Again", "url": f"https://t.me/Kitsu_zk_bot?start={parts[1]}" if len(parts) > 1 else "https://t.me/Kitsu_zk_bot"}
+                        {"text": "🔄 Joined / Try Again", "url": f"https://t.me/Kitsu_zk_bot{retry_param}"}
                     ]
                 ]
             }
@@ -86,8 +123,8 @@ def webhook():
             send_telegram_message(chat_id, welcome_force_msg, reply_markup=join_keyboard)
             return "OK", 200
 
-        # Normal Flow (Jab User Subscribed Ho)
-        if len(parts) == 1 and parts[0] == "/start":
+        # Agar User Subscribed hai:
+        if text == "/start" or len(parts) == 1 and parts[0] == "/start":
             welcome_msg = (
                 "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\n"
                 "🎉 Aapka swagat hai Hindi Dubbed Anime World mein!\n\n"
@@ -97,36 +134,11 @@ def webhook():
             )
             send_telegram_message(chat_id, welcome_msg)
             
-        elif len(parts) > 1 and parts[1].startswith("ep_"):
-            episode_id = parts[1]
-            try:
-                api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
-                res = requests.get(api_url, timeout=10).json()
-
-                if res.get("success"):
-                    token = res.get("token")
-                    watch_url = f"{WEB_APP_DOMAIN}/watch?id={episode_id}&token={token}"
-
-                    keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": "▶️ Watch Anime Now (Kitsu Player)",
-                                    "web_app": {"url": watch_url}
-                                }
-                            ]
-                        ]
-                    }
-
-                    send_telegram_message(
-                        chat_id,
-                        "🎬 **Kitsu Player Ready!**\n\n"
-                        "Neeche diye gaye button par click karke anime dekhein.",
-                        reply_markup=keyboard
-                    )
-                else:
-                    send_telegram_message(chat_id, f"❌ Token error: {res.get('message', 'Unknown')}")
-            except Exception as e:
-                send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
+        elif target_episode_id:
+            # Ab chahe deep link ho ya direct text mein ep_xxxx bheja ho, yeh function button bhej dega
+            handle_episode_request(chat_id, user_id, target_episode_id)
 
     return "OK", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.PORT, 5000))
