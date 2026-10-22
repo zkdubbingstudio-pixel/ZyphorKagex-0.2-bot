@@ -41,7 +41,8 @@ def webhook():
                 "Channel par di gayi episode links par click karke aap direct anime stream kar sakte hain."
             )
         elif len(parts) > 1 and parts[1].startswith("ep_"):
-            episode_id = parts[1].replace("ep_", "")
+            # Yahan fix kiya hai taaki poora ep_ID jaye
+            episode_id = parts[1]
             try:
                 api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
                 res = requests.get(api_url, timeout=10).json()
@@ -68,8 +69,8 @@ def webhook():
                         reply_markup=keyboard
                     )
                 else:
-                    send_telegram_message(chat_id, "❌ Token generate karne mein error aaya.")
-            except Exception:
-                send_telegram_message(chat_id, "❌ Web server connect nahi ho paya.")
+                    send_telegram_message(chat_id, f"❌ Token error: {res.get('message', 'Unknown')}")
+            except Exception as e:
+                send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
     return "OK", 200
