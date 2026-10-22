@@ -1,8 +1,6 @@
 import os
 import requests
-import threading
-import time
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -23,24 +21,15 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
-    res = requests.post(url, json=payload).json()
-    if res.get("ok"):
-        return res["result"]["message_id"]
-    return None
-
-def delete_telegram_message(chat_id, message_id, delay=600):
-    """10 Minutes Baad Message Delete Karne Ke Liye Thread"""
-    def delayed_delete():
-        time.sleep(delay)
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-        requests.post(url, json={"chat_id": chat_id, "message_id": message_id})
-
-    threading.Thread(target=delayed_delete).start()
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        print(f"Send message error: {e}")
 
 def is_user_member(user_id, channel_id):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
-        res = requests.get(url, params={"chat_id": channel_id, "user_id": user_id}, timeout=5).json()
+        res = requests.get(url, params={"chat_id": channel_id, "user_id": user_id}, timeout=4).json()
         if res.get("ok"):
             status = res["result"]["status"]
             return status in ["creator", "administrator", "member"]
@@ -48,107 +37,99 @@ def is_user_member(user_id, channel_id):
         print(f"Member check error: {e}")
     return True
 
-def handle_episode_request(chat_id, user_id, episode_id):
-    try:
-        api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={episode_id}&userId={user_id}"
-        res = requests.get(api_url, timeout=10).json()
-
-        if res.get("success"):
-            token = res.get("token")
-            watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
-
-            keyboard = {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "▶️ Watch Anime Now (Kitsu Player)",
-                            "web_app": {"url": watch_url}
-                        }
-                    ]
-                ]
-            }
-
-            msg_text = (
-                "🎬 **Kitsu Player Ready!**\n\n"
-                "⚠️ *Note: Yeh link secure hai aur kuch samay baad automatic expire/delete ho jayegi.*"
-            )
-            
-            msg_id = send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
-            
-            if msg_id:
-                delete_telegram_message(chat_id, msg_id, delay=600)
-
-        else:
-            send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
-
 @app.route('/', methods=['GET'])
 def home():
-    return "Kitsu Bot Serverless is Active!", 200
+    return "Kitsu Vercel Bot is Active!", 200
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    update = request.get_json()
-    
-    if "message" in update:
-        msg = update["message"]
-        chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
-        text = msg.get("text", "").strip()
-        caption = msg.get("caption", "").strip()
+    try:
+        update = request.get_json()
         
-        full_text = text if text else caption
-        parts = full_text.split()
-
-        # Admin Link Generator Command
-        if full_text.startswith("/getlink"):
-            if len(parts) > 1:
-                ep_id = parts[1]
-                channel_post_link = f"https://t.me/{BOT_USERNAME}?start={ep_id}"
-                send_telegram_message(
-                    chat_id,
-                    f"✅ **Official Channel Share Link:**\n\n`{channel_post_link}`\n\nIs link ko copy karke apne main channel mein share karein!"
-                )
-            else:
-                send_telegram_message(chat_id, "⚠️ Format error! Write: `/getlink ep_xxxx`")
-            return "OK", 200
-
-        target_episode_id = None
-        
-        # 1. Check if deep link format like /start ep_xxxx
-        if len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
-            target_episode_id = parts[1]
-        # 2. Check if direct text contains ep_xxxx anywhere
-        else:
-            for part in parts:
-                if part.startswith("ep_"):
-                    target_episode_id = part
-                    break
-            if not target_episode_id and full_text.startswith("ep_"):
-                target_episode_id = full_text.split()[0]
+        if "message" in update:
+            msg = update["message"]
+            chat_id = msg["chat"]["id"]
+            user_id = msg["from"]["id"]
+            text = msg.get("text", "").strip()
+            caption = msg.get("caption", "").strip()
             
-        # Force Join Check (If target episode is requested)
-        if target_episode_id:
-            if not is_user_member(user_id, CHANNEL_1):
-                retry_param = f"?start={target_episode_id}"
-                join_keyboard = {
-                    "inline_keyboard": [
-                        [{"text": "📢 Join ZK Dubbing Studio", "url": "https://t.me/zk_dubbing_studio"}],
-                        [{"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}],
-                        [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
-                    ]
-                }
-                send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
-                return "OK", 200
+            full_text = text if text else caption
+            parts = full_text.split()
 
-            handle_episode_request(chat_id, user_id, target_episode_id)
-            return "OK", 200
+            # Admin Link Generator
+            if full_text.startswith("/getlink"):
+                if len(parts) > 1:
+                    ep_id = parts[1]
+                    channel_post_link = f"https://t.me/{BOT_USERNAME}?start={ep_id}"
+                    send_telegram_message(
+                        chat_id,
+                        f"✅ **Official Channel Share Link:**\n\n`{channel_post_link}`"
+                    )
+                else:
+                    send_telegram_message(chat_id, "⚠️ Write: `/getlink ep_xxxx`")
+                return jsonify({"status": "ok"}), 200
 
-        if full_text == "/start" or (len(parts) == 1 and parts[0] == "/start"):
-            send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\nAapko anime episodes ke liye channel par di gayi links par click karna hoga.")
+            target_episode_id = None
+            
+            # Deep link /start ep_xxxx check
+            if len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
+                target_episode_id = parts[1]
+            else:
+                for part in parts:
+                    if part.startswith("ep_"):
+                        target_episode_id = part
+                        break
 
-    return "OK", 200
+            if target_episode_id:
+                # Force join check
+                if not is_user_member(user_id, CHANNEL_1):
+                    retry_param = f"?start={target_episode_id}"
+                    join_keyboard = {
+                        "inline_keyboard": [
+                            [{"text": "📢 Join ZK Dubbing Studio", "url": "https://t.me/zk_dubbing_studio"}],
+                            [{"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}],
+                            [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
+                        ]
+                    }
+                    send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
+                    return jsonify({"status": "ok"}), 200
 
-if __name__ == "__main__":
-    app.run(port=5000)
+                # Fast token request to Render backend
+                try:
+                    api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
+                    res = requests.get(api_url, timeout=8).json()
+
+                    if res.get("success"):
+                        token = res.get("token")
+                        watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
+
+                        keyboard = {
+                            "inline_keyboard": [
+                                [
+                                    {
+                                        "text": "▶️ Watch Anime Now (Kitsu Player)",
+                                        "web_app": {"url": watch_url}
+                                    }
+                                ]
+                            ]
+                        }
+
+                        msg_text = (
+                            "🎬 **Kitsu Player Ready!**\n\n"
+                            "⚠️ *Note: Yeh link secure hai aur kuch samay baad expire ho jayegi.*"
+                        )
+                        send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
+                    else:
+                        send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
+                except Exception as e:
+                    send_telegram_message(chat_id, "❌ Server connection timeout. Phir se try karein!")
+
+                return jsonify({"status": "ok"}), 200
+
+            if full_text == "/start":
+                send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\nAapko anime episodes ke liye channel par di gayi links par click karna hoga.")
+
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        
+    return jsonify({"status": "ok"}), 200
