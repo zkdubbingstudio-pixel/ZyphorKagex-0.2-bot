@@ -71,7 +71,7 @@ def webhook():
 
             target_episode_id = None
             
-            # Smart Episode ID Extractor (Handles deep links, pasted URLs, and raw text)
+            # Smart Episode ID Extractor
             if "start=ep_" in full_text:
                 try:
                     sub = full_text.split("start=")[1]
@@ -104,10 +104,10 @@ def webhook():
                     send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
-                # Request token from Render backend
+                # Instant request to Render backend
                 try:
                     api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
-                    res = requests.get(api_url, timeout=8).json()
+                    res = requests.get(api_url, timeout=6).json()
 
                     if res.get("success"):
                         token = res.get("token")
@@ -132,7 +132,7 @@ def webhook():
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
                 except Exception as e:
-                    send_telegram_message(chat_id, "❌ Server connection timeout. Phir se try karein!")
+                    send_telegram_message(chat_id, "❌ Server connection error. Phir se try karein!")
 
                 return jsonify({"status": "ok"}), 200
 
@@ -143,3 +143,6 @@ def webhook():
         print(f"Webhook error: {e}")
         
     return jsonify({"status": "ok"}), 200
+
+if __name__ == "__main__":
+    app.run(port=5000)
