@@ -116,14 +116,17 @@ def webhook():
 
         target_episode_id = None
         
-        # Check if deep link format like /start ep_xxxx
+        # 1. Check if deep link format like /start ep_xxxx
         if len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
             target_episode_id = parts[1]
-        # Check if direct episode text or forwarded text like ep_xxxx
-        elif full_text.startswith("ep_"):
-            target_episode_id = full_text.split()[0]
-        elif len(parts) > 0 and parts[0].startswith("ep_"):
-            target_episode_id = parts[0]
+        # 2. Check if direct text contains ep_xxxx anywhere
+        else:
+            for part in parts:
+                if part.startswith("ep_"):
+                    target_episode_id = part
+                    break
+            if not target_episode_id and full_text.startswith("ep_"):
+                target_episode_id = full_text.split()[0]
             
         # Force Join Check (If target episode is requested)
         if target_episode_id:
