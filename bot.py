@@ -41,7 +41,6 @@ def is_user_member(user_id, channel_id):
 def home():
     return "Kitsu Vercel Bot is Active!", 200
 
-# Catch-all route to handle webhook regardless of path suffix
 @app.route('/', methods=['POST'])
 @app.route('/<path:subpath>', methods=['POST'])
 def webhook(subpath=''):
@@ -108,10 +107,10 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
-                # Instant request to Render backend
+                # Request token from Render backend with 15s safe timeout
                 try:
                     api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
-                    res = requests.get(api_url, timeout=6).json()
+                    res = requests.get(api_url, timeout=15).json()
 
                     if res.get("success"):
                         token = res.get("token")
@@ -136,7 +135,7 @@ def webhook(subpath=''):
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
                 except Exception as e:
-                    send_telegram_message(chat_id, "❌ Server connection error. Phir se try karein!")
+                    send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
                 return jsonify({"status": "ok"}), 200
 
