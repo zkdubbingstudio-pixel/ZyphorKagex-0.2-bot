@@ -41,10 +41,14 @@ def is_user_member(user_id, channel_id):
 def home():
     return "Kitsu Vercel Bot is Active!", 200
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
+# Catch-all route to handle webhook regardless of path suffix
+@app.route('/', methods=['POST'])
+@app.route('/<path:subpath>', methods=['POST'])
+def webhook(subpath=''):
     try:
-        update = request.get_json()
+        update = request.get_json(silent=True)
+        if not update:
+            return jsonify({"status": "ok"}), 200
         
         if "message" in update:
             msg = update["message"]
