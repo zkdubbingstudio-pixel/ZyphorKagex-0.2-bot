@@ -26,7 +26,7 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
-        "protect_content": True  # Forwarding rokne ke liye
+        "protect_content": True
     }
     if reply_markup:
         payload["reply_markup"] = reply_markup
@@ -36,7 +36,6 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         print(f"Send message error: {e}")
 
 def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=600):
-    """10 minute baad message auto-delete karne ke liye background task"""
     def task():
         import time
         time.sleep(delay_seconds)
@@ -49,7 +48,6 @@ def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=600):
     threading.Thread(target=task, daemon=True).start()
 
 def check_user_access_db(user_id):
-    """Check karta hai ki user ka subscription active hai ya nahi"""
     if user_id in ADMIN_IDS:
         return True
     try:
@@ -91,7 +89,6 @@ def webhook(subpath=''):
         if not update:
             return jsonify({"status": "ok"}), 200
         
-        # Callback query handle karne ke liye (Jaise user remove button dabaye)
         if "callback_query" in update:
             cq = update["callback_query"]
             c_id = cq["message"]["chat"]["id"]
@@ -105,7 +102,6 @@ def webhook(subpath=''):
                     del_url = f"{SUPABASE_URL}/rest/v1/user_subscriptions?id=eq.{sub_id}"
                     requests.delete(del_url, headers=headers, timeout=5)
                     
-                    # Answer callback query
                     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": "User access removed successfully!", "show_alert": True})
                     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": c_id, "text": "✅ User ka access successfully hata diya gaya hai.", "protect_content": True})
                 except Exception as e:
@@ -158,7 +154,7 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Server error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 2. Admin Command: /users (List active users & remove buttons)
+            # 2. Admin Command: /users
             if full_text.startswith("/users"):
                 if user_id not in ADMIN_IDS:
                     return jsonify({"status": "ok"}), 200
@@ -199,7 +195,6 @@ def webhook(subpath=''):
 
             target_episode_id = None
             
-            # Smart Episode ID Extractor
             if "start=ep_" in full_text:
                 try:
                     sub = full_text.split("start=")[1]
@@ -219,7 +214,7 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                # 🛑 ACCESS & PREMIUM CHECK
+                # 🛑 ACCESS & PREMIUM CHECK (Corrected Username)
                 if not check_user_access_db(user_id):
                     send_telegram_message(
                         chat_id,
@@ -228,7 +223,6 @@ def webhook(subpath=''):
                     )
                     return jsonify({"status": "ok"}), 200
 
-                # Force join check
                 if not is_user_member(user_id, CHANNEL_1):
                     retry_param = f"?start={target_episode_id}"
                     join_keyboard = {
@@ -241,7 +235,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
-                # Request token from Render backend with safe timeout
                 try:
                     api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
                     res = requests.get(api_url, timeout=15).json()
@@ -268,7 +261,6 @@ def webhook(subpath=''):
                             "• Yeh message **10 minute** mein automatic delete ho jayega."
                         )
                         
-                        # Send message and get message ID for auto-delete
                         url_send = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
                         payload_send = {
                             "chat_id": chat_id,
@@ -280,7 +272,7 @@ def webhook(subpath=''):
                         r_sent = requests.post(url_send, json=payload_send, timeout=5).json()
                         if r_sent.get("ok"):
                             sent_msg_id = r_sent["result"]["message_id"]
-                            delete_telegram_message_delayed(chat_id, sent_msg_id, 600) # 10 minutes (600 seconds)
+                            delete_telegram_message_delayed(chat_id, sent_msg_id, 600)
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
                 except Exception as e:
