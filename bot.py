@@ -13,11 +13,23 @@ BOT_USERNAME = "Kitsu_zk_bot"
 CHANNEL_1 = "@zk_dubbing_studio"
 CHANNEL_2_LINK = "https://t.me/+H3TykxfXuwdlODNl"
 
-# 🟢 Sirf aap dono ki IDs admin hain jo /adduser aur /users chala sakenge
 ADMIN_IDS = [6144546817, 8528056660]
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "YOUR_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "YOUR_SUPABASE_ANON_KEY")
+
+def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=300):
+    """5 minute (300 seconds) baad message auto-delete karne ke liye background thread"""
+    def task():
+        import time
+        time.sleep(delay_seconds)
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+            requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
+        except Exception as e:
+            print(f"Auto-delete error: {e}")
+    import threading
+    threading.Thread(target=task, daemon=True).start()
 
 def send_telegram_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -31,21 +43,13 @@ def send_telegram_message(chat_id, text, reply_markup=None):
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        requests.post(url, json=payload, timeout=5)
+        response = requests.post(url, json=payload, timeout=5).json()
+        # Bot ke bheje gaye message ko 5 min baad auto-delete karne ke liye
+        if response.get("ok"):
+            msg_id = response["result"]["message_id"]
+            delete_telegram_message_delayed(chat_id, msg_id, 300) # 300 seconds = 5 minutes
     except Exception as e:
         print(f"Send message error: {e}")
-
-def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=600):
-    def task():
-        import time
-        time.sleep(delay_seconds)
-        try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
-            requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
-        except Exception as e:
-            print(f"Auto-delete error: {e}")
-    import threading
-    threading.Thread(target=task, daemon=True).start()
 
 def check_user_access_db(user_id):
     if user_id in ADMIN_IDS:
@@ -103,7 +107,7 @@ def webhook(subpath=''):
                     requests.delete(del_url, headers=headers, timeout=5)
                     
                     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": "User access removed successfully!", "show_alert": True})
-                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": c_id, "text": "✅ User ka access successfully hata diya gaya hai.", "protect_content": True})
+                    send_telegram_message(c_id, "✅ User ka access successfully hata diya gaya hai.")
                 except Exception as e:
                     print(f"Delete callback error: {e}")
             return jsonify({"status": "ok"}), 200
@@ -118,7 +122,6 @@ def webhook(subpath=''):
             full_text = text if text else caption
             parts = full_text.split()
 
-            # 1. Admin Command: /adduser <user_id> <anime_name> <days>
             if full_text.startswith("/adduser"):
                 if user_id not in ADMIN_IDS:
                     send_telegram_message(chat_id, "❌ Aap yeh command use nahi kar sakte!")
@@ -154,7 +157,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Server error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 2. Admin Command: /users
             if full_text.startswith("/users"):
                 if user_id not in ADMIN_IDS:
                     return jsonify({"status": "ok"}), 200
@@ -180,7 +182,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error fetching users: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # Admin Link Generator
             if full_text.startswith("/getlink") and user_id in ADMIN_IDS:
                 if len(parts) > 1:
                     ep_id = parts[1]
@@ -194,7 +195,6 @@ def webhook(subpath=''):
                 return jsonify({"status": "ok"}), 200
 
             target_episode_id = None
-            
             if "start=ep_" in full_text:
                 try:
                     sub = full_text.split("start=")[1]
@@ -214,12 +214,12 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                # 🛑 ACCESS & PREMIUM CHECK (Corrected Username)
+                # 🛑 Access Check with escaped underscore for username `@zk\_studio\_owner`
                 if not check_user_access_db(user_id):
                     send_telegram_message(
                         chat_id,
                         "⚠️ Aap anime stream nhi kar sakte aapko hamre premium lena hoga.\n\n"
-                        "Premium lene ke liye yha pe message/dm karo :- @zk_studio_owner"
+                        "Premium lene ke liye yha pe message/dm karo :- @zk\\_studio\\_owner"
                     )
                     return jsonify({"status": "ok"}), 200
 
@@ -258,21 +258,9 @@ def webhook(subpath=''):
                             "🎬 **Kitsu Player Ready!**\n\n"
                             "📌 **Rules:**\n"
                             "• Yeh link sirf **2 baar** open ki ja sakti hai.\n"
-                            "• Yeh message **10 minute** mein automatic delete ho jayega."
+                            "• Yeh message **5 minute** mein automatic delete ho jayega."
                         )
-                        
-                        url_send = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                        payload_send = {
-                            "chat_id": chat_id,
-                            "text": msg_text,
-                            "parse_mode": "Markdown",
-                            "reply_markup": keyboard,
-                            "protect_content": True
-                        }
-                        r_sent = requests.post(url_send, json=payload_send, timeout=5).json()
-                        if r_sent.get("ok"):
-                            sent_msg_id = r_sent["result"]["message_id"]
-                            delete_telegram_message_delayed(chat_id, sent_msg_id, 600)
+                        send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
                 except Exception as e:
@@ -285,7 +273,7 @@ def webhook(subpath=''):
                     send_telegram_message(
                         chat_id,
                         "⚠️ Aap anime stream nhi kar sakte aapko hamre premium lena hoga.\n\n"
-                        "Premium lene ke liye yha pe message/dm karo :- @zk_studio_owner"
+                        "Premium lene ke liye yha pe message/dm karo :- @zk\\_studio\\_owner"
                     )
                 else:
                     send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\nAapko anime episodes ke liye channel par di gayi links par click karna hoga.")
