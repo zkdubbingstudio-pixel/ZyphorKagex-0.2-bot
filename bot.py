@@ -16,8 +16,9 @@ CHANNEL_2_LINK = "https://t.me/+H3TykxfXuwdlODNl"
 
 ADMIN_IDS = [6144546817, 8528056660]
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "YOUR_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "YOUR_SUPABASE_ANON_KEY")
+# 🟢 Aapki Asli Supabase Credentials yahan set hain
+SUPABASE_URL = "https://knefbynsdhgjuhlklyvu.supabase.co"
+SUPABASE_KEY = "sb_publishable_tZxPCR45AXkjm73Fq81YAQ_VHEsGZVJ"
 
 def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=300):
     def task():
@@ -49,13 +50,11 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         print(f"Send message error: {e}")
 
 def check_user_anime_access(user_id, episode_id):
-    """Check karta hai ki user ke paas is specific episode/anime ka access hai ya nahi"""
     if user_id in ADMIN_IDS:
         return True
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
         
-        # 1. Pehle episode ki details fetch karo taaki anime_name mil sake
         ep_url = f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{episode_id}&select=anime_name"
         ep_res = requests.get(ep_url, headers=headers, timeout=5).json()
         if not ep_res or not isinstance(ep_res, list):
@@ -63,7 +62,6 @@ def check_user_anime_access(user_id, episode_id):
         
         anime_name = ep_res[0].get("anime_name", "").strip().lower()
 
-        # 2. Ab check karo ki user ke paas is anime ka active subscription hai ya nahi
         sub_url = f"{SUPABASE_URL}/rest/v1/user_subscriptions?user_id=eq.{user_id}"
         sub_res = requests.get(sub_url, headers=headers, timeout=5).json()
         
@@ -81,7 +79,6 @@ def check_user_anime_access(user_id, episode_id):
     return False
 
 def check_user_general_access(user_id):
-    """Check karta hai ki user ke paas koi bhi active subscription hai ya nahi (/start ke liye)"""
     if user_id in ADMIN_IDS:
         return True
     try:
@@ -152,7 +149,6 @@ def webhook(subpath=''):
             full_text = text if text else caption
             parts = full_text.split()
 
-            # Robust /adduser command supporting spaces in anime names
             if full_text.startswith("/adduser"):
                 if user_id not in ADMIN_IDS:
                     send_telegram_message(chat_id, "❌ Aap yeh command use nahi kar sakte!")
@@ -173,7 +169,7 @@ def webhook(subpath=''):
                 except Exception as e:
                     send_telegram_message(
                         chat_id,
-                        "⚠️ Sahi format use karein (bina brackets ke):\n"
+                        "⚠️ Sahi format use karein:\n"
                         "`/adduser <user_id> <anime_name> <days>`\n\n"
                         "Example:\n`/adduser 8308984306 Hello, I Am a Witch 20`"
                     )
