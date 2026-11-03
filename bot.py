@@ -1,6 +1,7 @@
 import os
 import requests
-import asyncio
+import time
+import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 
@@ -19,16 +20,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "YOUR_SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "YOUR_SUPABASE_ANON_KEY")
 
 def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=300):
-    """5 minute (300 seconds) baad message auto-delete karne ke liye background thread"""
     def task():
-        import time
         time.sleep(delay_seconds)
         try:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
             requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
         except Exception as e:
             print(f"Auto-delete error: {e}")
-    import threading
     threading.Thread(target=task, daemon=True).start()
 
 def send_telegram_message(chat_id, text, reply_markup=None):
@@ -44,14 +42,46 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         payload["reply_markup"] = reply_markup
     try:
         response = requests.post(url, json=payload, timeout=5).json()
-        # Bot ke bheje gaye message ko 5 min baad auto-delete karne ke liye
         if response.get("ok"):
             msg_id = response["result"]["message_id"]
-            delete_telegram_message_delayed(chat_id, msg_id, 300) # 300 seconds = 5 minutes
+            delete_telegram_message_delayed(chat_id, msg_id, 300)
     except Exception as e:
         print(f"Send message error: {e}")
 
-def check_user_access_db(user_id):
+def check_user_anime_access(user_id, episode_id):
+    """Check karta hai ki user ke paas is specific episode/anime ka access hai ya nahi"""
+    if user_id in ADMIN_IDS:
+        return True
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        
+        # 1. Pehle episode ki details fetch karo taaki anime_name mil sake
+        ep_url = f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{episode_id}&select=anime_name"
+        ep_res = requests.get(ep_url, headers=headers, timeout=5).json()
+        if not ep_res or not isinstance(ep_res, list):
+            return False
+        
+        anime_name = ep_res[0].get("anime_name", "").strip().lower()
+
+        # 2. Ab check karo ki user ke paas is anime ka active subscription hai ya nahi
+        sub_url = f"{SUPABASE_URL}/rest/v1/user_subscriptions?user_id=eq.{user_id}"
+        sub_res = requests.get(sub_url, headers=headers, timeout=5).json()
+        
+        if isinstance(sub_res, list):
+            now = datetime.utcnow()
+            for sub in sub_res:
+                expiry_str = sub.get("expires_at", "").replace("Z", "")
+                sub_anime = sub.get("anime_name", "").strip().lower()
+                if expiry_str and sub_anime:
+                    expiry = datetime.fromisoformat(expiry_str)
+                    if expiry > now and (sub_anime == anime_name or sub_anime == "all"):
+                        return True
+    except Exception as e:
+        print(f"Anime access check error: {e}")
+    return False
+
+def check_user_general_access(user_id):
+    """Check karta hai ki user ke paas koi bhi active subscription hai ya nahi (/start ke liye)"""
     if user_id in ADMIN_IDS:
         return True
     try:
@@ -67,7 +97,7 @@ def check_user_access_db(user_id):
                     if expiry > now:
                         return True
     except Exception as e:
-        print(f"DB access check error: {e}")
+        print(f"General access check error: {e}")
     return False
 
 def is_user_member(user_id, channel_id):
@@ -122,26 +152,37 @@ def webhook(subpath=''):
             full_text = text if text else caption
             parts = full_text.split()
 
+            # Robust /adduser command supporting spaces in anime names
             if full_text.startswith("/adduser"):
                 if user_id not in ADMIN_IDS:
                     send_telegram_message(chat_id, "❌ Aap yeh command use nahi kar sakte!")
                     return jsonify({"status": "ok"}), 200
                 
-                if len(parts) < 4:
-                    send_telegram_message(chat_id, "⚠️ Sahi format use karein:\n`/adduser <user_id> <anime_name> <days>`\nExample: `/adduser 123456789 Overlord 30`")
-                    return jsonify({"status": "ok"}), 200
-                
-                target_user_id, anime_name, days_str = parts[1], parts[2], parts[3]
                 try:
+                    parts = full_text.split(maxsplit=2)
+                    if len(parts) < 3:
+                        raise ValueError("Invalid format")
+                    
+                    _, target_user_id, remaining = parts
+                    rem_parts = remaining.rsplit(maxsplit=1)
+                    if len(rem_parts) < 2:
+                        raise ValueError("Invalid format")
+                    
+                    anime_name, days_str = rem_parts
                     days = int(days_str)
-                except ValueError:
-                    send_telegram_message(chat_id, "❌ Days ek valid number hona chahiye!")
+                except Exception as e:
+                    send_telegram_message(
+                        chat_id,
+                        "⚠️ Sahi format use karein (bina brackets ke):\n"
+                        "`/adduser <user_id> <anime_name> <days>`\n\n"
+                        "Example:\n`/adduser 8308984306 Hello, I Am a Witch 20`"
+                    )
                     return jsonify({"status": "ok"}), 200
                 
                 expiry_date = datetime.utcnow() + timedelta(days=days)
                 payload = {
-                    "user_id": target_user_id,
-                    "anime_name": anime_name,
+                    "user_id": target_user_id.strip(),
+                    "anime_name": anime_name.strip(),
                     "expires_at": expiry_date.isoformat()
                 }
                 
@@ -214,11 +255,10 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                # 🛑 Access Check with escaped underscore for username `@zk\_studio\_owner`
-                if not check_user_access_db(user_id):
+                if not check_user_anime_access(user_id, target_episode_id):
                     send_telegram_message(
                         chat_id,
-                        "⚠️ Aap anime stream nhi kar sakte aapko hamre premium lena hoga.\n\n"
+                        "⚠️ Aap is anime ko stream nhi kar sakte, aapke paas iska premium nahi hai.\n\n"
                         "Premium lene ke liye yha pe message/dm karo :- @zk\\_studio\\_owner"
                     )
                     return jsonify({"status": "ok"}), 200
@@ -269,7 +309,7 @@ def webhook(subpath=''):
                 return jsonify({"status": "ok"}), 200
 
             if full_text == "/start":
-                if not check_user_access_db(user_id):
+                if not check_user_general_access(user_id):
                     send_telegram_message(
                         chat_id,
                         "⚠️ Aap anime stream nhi kar sakte aapko hamre premium lena hoga.\n\n"
