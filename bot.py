@@ -44,6 +44,7 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         response = requests.post(url, json=payload, timeout=5).json()
         if response.get("ok"):
             msg_id = response["result"]["message_id"]
+            # Auto-delete after 5 minutes (300 seconds)
             delete_telegram_message_delayed(chat_id, msg_id, 300)
     except Exception as e:
         print(f"Send message error: {e}")
@@ -142,11 +143,27 @@ def webhook(subpath=''):
             msg = update["message"]
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
+            message_id = msg["message_id"]
             text = msg.get("text", "").strip()
             caption = msg.get("caption", "").strip()
             
             full_text = text if text else caption
             parts = full_text.split()
+
+            # 🧹 /clear Command: User ki bheji hui command/link ko turant delete kar dega
+            if full_text.startswith("/clear"):
+                try:
+                    # User ke message ko delete karo
+                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
+                    # Agar admin hai toh confirmation bhej kar 5 sec mein uda do
+                    if user_id in ADMIN_IDS:
+                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                        res = requests.post(url, json={"chat_id": chat_id, "text": "🧹 Chat cleared successfully!"}, timeout=5).json()
+                        if res.get("ok"):
+                            delete_telegram_message_delayed(chat_id, res["result"]["message_id"], 5)
+                except Exception as e:
+                    print(f"Clear command error: {e}")
+                return jsonify({"status": "ok"}), 200
 
             if full_text.startswith("/adduser"):
                 if user_id not in ADMIN_IDS:
@@ -298,7 +315,7 @@ def webhook(subpath=''):
                         send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
-                except Exception as e:
+                exceptException as e:
                     send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
                 return jsonify({"status": "ok"}), 200
