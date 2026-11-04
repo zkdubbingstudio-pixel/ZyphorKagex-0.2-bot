@@ -19,6 +19,14 @@ ADMIN_IDS = [6144546817, 8528056660]
 SUPABASE_URL = "https://knefbynsdhgjuhlklyvu.supabase.co"
 SUPABASE_KEY = "sb_publishable_tZxPCR45AXkjm73Fq81YAQ_VHEsGZVJ"
 
+def save_sent_message(chat_id, message_id):
+    try:
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+        payload = {"chat_id": str(chat_id), "message_id": int(message_id)}
+        requests.post(f"{SUPABASE_URL}/rest/v1/sent_messages", json=payload, headers=headers, timeout=5)
+    except Exception as e:
+        print(f"Save message error: {e}")
+
 def delete_telegram_message_delayed(chat_id, message_id, delay_seconds=300):
     def task():
         time.sleep(delay_seconds)
@@ -44,7 +52,9 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         response = requests.post(url, json=payload, timeout=5).json()
         if response.get("ok"):
             msg_id = response["result"]["message_id"]
-            # Auto-delete after 5 minutes (300 seconds)
+            # Database mein message save karo taaki /clear se delete ho sake
+            save_sent_message(chat_id, msg_id)
+            # 5 minute baad auto-delete
             delete_telegram_message_delayed(chat_id, msg_id, 300)
     except Exception as e:
         print(f"Send message error: {e}")
@@ -54,14 +64,12 @@ def check_user_anime_access(user_id, episode_id):
         return True
     try:
         headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-        
         ep_url = f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{episode_id}&select=anime_name"
         ep_res = requests.get(ep_url, headers=headers, timeout=5).json()
         if not ep_res or not isinstance(ep_res, list):
             return False
         
         anime_name = ep_res[0].get("anime_name", "").strip().lower()
-
         sub_url = f"{SUPABASE_URL}/rest/v1/user_subscriptions?user_id=eq.{user_id}"
         sub_res = requests.get(sub_url, headers=headers, timeout=5).json()
         
@@ -143,26 +151,37 @@ def webhook(subpath=''):
             msg = update["message"]
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
-            message_id = msg["message_id"]
             text = msg.get("text", "").strip()
             caption = msg.get("caption", "").strip()
             
             full_text = text if text else caption
             parts = full_text.split()
 
-            # 🧹 /clear Command: User ki bheji hui command/link ko turant delete kar dega
-            if full_text.startswith("/clear"):
+            # 🧹 /clear Command: Bot dwara bheje gaye sabhi messages/links ko delete kar dega
+            if full_text.startswith("/clear") and user_id in ADMIN_IDS:
                 try:
-                    # User ke message ko delete karo
-                    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
-                    # Agar admin hai toh confirmation bhej kar 5 sec mein uda do
-                    if user_id in ADMIN_IDS:
-                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                        res = requests.post(url, json={"chat_id": chat_id, "text": "🧹 Chat cleared successfully!"}, timeout=5).json()
-                        if res.get("ok"):
-                            delete_telegram_message_delayed(chat_id, res["result"]["message_id"], 5)
+                    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+                    get_url = f"{SUPABASE_URL}/rest/v1/sent_messages?select=chat_id,message_id"
+                    res = requests.get(get_url, headers=headers, timeout=5).json()
+                    
+                    deleted_count = 0
+                    if isinstance(res, list):
+                        for item in res:
+                            c_id = item.get("chat_id")
+                            m_id = item.get("message_id")
+                            try:
+                                del_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
+                                requests.post(del_url, json={"chat_id": c_id, "message_id": m_id}, timeout=3)
+                                deleted_count += 1
+                            except:
+                                pass
+                        
+                        # Database table clear kar do
+                        requests.delete(f"{SUPABASE_URL}/rest/v1/sent_messages?message_id=gt.0", headers=headers, timeout=5)
+                    
+                    send_telegram_message(chat_id, f"🧹 Successfully cleared and deleted {deleted_count} bot messages/links across chats!")
                 except Exception as e:
-                    print(f"Clear command error: {e}")
+                    send_telegram_message(chat_id, f"❌ Clear error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
             if full_text.startswith("/adduser"):
@@ -284,7 +303,7 @@ def webhook(subpath=''):
                             [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
                         ]
                     }
-                    send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
+                    send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_logger if 'join_logger' in locals() else join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
                 try:
@@ -315,7 +334,7 @@ def webhook(subpath=''):
                         send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
                     else:
                         send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
-                exceptException as e:
+                except Exception as e:
                     send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
 
                 return jsonify({"status": "ok"}), 200
