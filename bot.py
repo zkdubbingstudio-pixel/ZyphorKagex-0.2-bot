@@ -16,7 +16,6 @@ CHANNEL_2_LINK = "https://t.me/+H3TykxfXuwdlODNl"
 
 ADMIN_IDS = [6144546817, 8528056660]
 
-# 🟢 Aapki Asli Supabase Credentials yahan set hain
 SUPABASE_URL = "https://knefbynsdhgjuhlklyvu.supabase.co"
 SUPABASE_KEY = "sb_publishable_tZxPCR45AXkjm73Fq81YAQ_VHEsGZVJ"
 
@@ -293,7 +292,7 @@ def webhook(subpath=''):
                         msg_text = (
                             "🎬 **Kitsu Player Ready!**\n\n"
                             "📌 **Rules:**\n"
-                            "• Yeh link sirf **2 baar** open ki ja sakti hai.\n"
+                            "• Yeh link sirf **1 baar** open ki ja sakti hai.\n"
                             "• Yeh message **5 minute** mein automatic delete ho jayega."
                         )
                         send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
