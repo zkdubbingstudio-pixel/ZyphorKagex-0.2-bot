@@ -181,7 +181,7 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Clear error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔗 /setepad Command: Specific episode ke liye custom ad/protection link set karne ke liye
+            # 🔗 /setepad Command (Smart link & ID extractor)
             if full_text.startswith("/setepad") and user_id in ADMIN_IDS:
                 try:
                     parts = full_text.split(maxsplit=2)
@@ -189,14 +189,24 @@ def webhook(subpath=''):
                         send_telegram_message(
                             chat_id,
                             "⚠️ Sahi format use karein:\n"
-                            "`/setepad <episode_id> <ad_link>`\n\n"
-                            "Example:\n`/setepad ep_1793711255297 https://links.otaku-provider-bots.workers.dev/...`"
+                            "`/setepad <telegram_link_ya_id> <ad_link>`\n\n"
+                            "Example:\n`/setepad https://t.me/Kitsu_zk_bot?start=ep_1793711255297 https://links.otaku-provider-bots.workers.dev/...`"
                         )
                         return jsonify({"status": "ok"}), 200
                     
-                    _, target_ep_id, new_ad_link = parts
-                    target_ep_id = target_ep_id.strip()
-                    new_ad_link = new_ad_link.strip()
+                    raw_target = parts[1].strip()
+                    new_ad_link = parts[2].strip()
+
+                    # Smart extraction: Chahe poori link do ya sirf ep_ ID, yeh khud extract kar lega
+                    target_ep_id = ""
+                    if "ep_" in raw_target:
+                        idx = raw_target.find("ep_")
+                        candidate = raw_target[idx:]
+                        target_ep_id = "".join([c for c in candidate if c.isalnum() or c == '_'])
+
+                    if not target_ep_id.startswith("ep_"):
+                        send_telegram_message(chat_id, "❌ Invalid Episode ID or Link! Sahi link ya ID dalein.")
+                        return jsonify({"status": "ok"}), 200
 
                     headers = {
                         "apikey": SUPABASE_KEY, 
