@@ -52,9 +52,7 @@ def send_telegram_message(chat_id, text, reply_markup=None):
         response = requests.post(url, json=payload, timeout=5).json()
         if response.get("ok"):
             msg_id = response["result"]["message_id"]
-            # Database mein message save karo taaki /clear se delete ho sake
             save_sent_message(chat_id, msg_id)
-            # 5 minute baad auto-delete
             delete_telegram_message_delayed(chat_id, msg_id, 300)
     except Exception as e:
         print(f"Send message error: {e}")
@@ -157,7 +155,7 @@ def webhook(subpath=''):
             full_text = text if text else caption
             parts = full_text.split()
 
-            # 🧹 /clear Command: Bot dwara bheje gaye sabhi messages/links ko delete kar dega
+            # 🧹 /clear Command: Bot messages cleanup across chats
             if full_text.startswith("/clear") and user_id in ADMIN_IDS:
                 try:
                     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
@@ -176,12 +174,46 @@ def webhook(subpath=''):
                             except:
                                 pass
                         
-                        # Database table clear kar do
                         requests.delete(f"{SUPABASE_URL}/rest/v1/sent_messages?message_id=gt.0", headers=headers, timeout=5)
                     
                     send_telegram_message(chat_id, f"🧹 Successfully cleared and deleted {deleted_count} bot messages/links across chats!")
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ Clear error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 🔗 /setepad Command: Specific episode ke liye custom ad/protection link set karne ke liye
+            if full_text.startswith("/setepad") and user_id in ADMIN_IDS:
+                try:
+                    parts = full_text.split(maxsplit=2)
+                    if len(parts) < 3:
+                        send_telegram_message(
+                            chat_id,
+                            "⚠️ Sahi format use karein:\n"
+                            "`/setepad <episode_id> <ad_link>`\n\n"
+                            "Example:\n`/setepad ep_1793711255297 https://links.otaku-provider-bots.workers.dev/...`"
+                        )
+                        return jsonify({"status": "ok"}), 200
+                    
+                    _, target_ep_id, new_ad_link = parts
+                    target_ep_id = target_ep_id.strip()
+                    new_ad_link = new_ad_link.strip()
+
+                    headers = {
+                        "apikey": SUPABASE_KEY, 
+                        "Authorization": f"Bearer {SUPABASE_KEY}", 
+                        "Content-Type": "application/json", 
+                        "Prefer": "return=minimal"
+                    }
+                    
+                    update_url = f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{target_ep_id}"
+                    resp = requests.patch(update_url, json={"ad_link": new_ad_link}, headers=headers, timeout=5)
+                    
+                    if resp.status_code in [200, 204]:
+                        send_telegram_message(chat_id, f"✅ Episode `{target_ep_id}` ke liye ad/protection link successfully set ho gayi hai!\n\n`{new_ad_link}`")
+                    else:
+                        send_telegram_message(chat_id, f"❌ Database update error: {resp.text}")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
             if full_text.startswith("/adduser"):
@@ -286,13 +318,7 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                if not check_user_anime_access(user_id, target_episode_id):
-                    send_telegram_message(
-                        chat_id,
-                        "⚠️ Aap is anime ko stream nhi kar sakte, aapke paas iska premium nahi hai.\n\n"
-                        "Premium lene ke liye yha pe message/dm karo :- @zk\\_studio\\_owner"
-                    )
-                    return jsonify({"status": "ok"}), 200
+                is_premium = check_user_anime_access(user_id, target_episode_id)
 
                 if not is_user_member(user_id, CHANNEL_1):
                     retry_param = f"?start={target_episode_id}"
@@ -303,39 +329,75 @@ def webhook(subpath=''):
                             [{"text": "🔄 Joined / Try Again", "url": f"https://t.me/{BOT_USERNAME}{retry_param}"}]
                         ]
                     }
-                    send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_logger if 'join_logger' in locals() else join_keyboard)
+                    send_telegram_message(chat_id, "✨ **Please Join Channel to Unlock Anime Links!**", reply_markup=join_keyboard)
                     return jsonify({"status": "ok"}), 200
 
-                try:
-                    api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
-                    res = requests.get(api_url, timeout=15).json()
+                if is_premium:
+                    # 💎 PREMIUM USER: Direct Ad-Free Player Link
+                    try:
+                        api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
+                        res = requests.get(api_url, timeout=15).json()
 
-                    if res.get("success"):
-                        token = res.get("token")
-                        watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
+                        if res.get("success"):
+                            token = res.get("token")
+                            watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
 
-                        keyboard = {
-                            "inline_keyboard": [
-                                [
-                                    {
-                                        "text": "▶️ Watch Anime Now (Kitsu Player)",
-                                        "web_app": {"url": watch_url}
-                                    }
+                            keyboard = {
+                                "inline_keyboard": [
+                                    [
+                                        {
+                                            "text": "▶️ Watch Anime Now (Ad-Free)",
+                                            "web_app": {"url": watch_url}
+                                        }
+                                    ]
                                 ]
-                            ]
-                        }
+                            }
 
-                        msg_text = (
-                            "🎬 **Kitsu Player Ready!**\n\n"
-                            "📌 **Rules:**\n"
-                            "• Yeh link sirf **1 baar** open ki ja sakti hai.\n"
-                            "• Yeh message **5 minute** mein automatic delete ho jayega."
-                        )
-                        send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
-                    else:
-                        send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
-                except Exception as e:
-                    send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
+                            msg_text = (
+                                "🎬 **Kitsu Player Ready (Premium - No Ads)!**\n\n"
+                                "• Aapke paas active premium hai, isliye yeh link bilkul ad-free hai."
+                            )
+                            send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
+                        else:
+                            send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
+                    except Exception as e:
+                        send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
+                else:
+                    # 📺 FREE USER: Fetch specific episode ad/protection link from database
+                    episode_ad_link = "https://shrinkme.click/default" # Fallback link
+                    try:
+                        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+                        ep_query_res = requests.get(f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{target_episode_id}&select=ad_link", headers=headers, timeout=5).json()
+                        if isinstance(ep_query_res, list) and len(ep_query_res) > 0:
+                            db_link = ep_query_res[0].get("ad_link")
+                            if db_link:
+                                episode_ad_link = db_link
+                    except Exception as e:
+                        print(f"Fetch episode ad link error: {e}")
+
+                    keyboard = {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "🔗 Watch via Ads (Protected Link)",
+                                    "url": episode_ad_link
+                                }
+                            ],
+                            [
+                                {
+                                    "text": "💎 Buy Premium (Remove Ads)",
+                                    "url": "https://t.me/zk_studio_owner"
+                                }
+                            ]
+                        ]
+                    }
+
+                    msg_text = (
+                        "🎬 **Free Episode Link (With Ads):**\n\n"
+                        "• Aapne premium nahi liya hai, isliye is episode ki ad-protected link niche di gayi hai.\n"
+                        "• Ads cross karke episode dekhein!"
+                    )
+                    send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
 
                 return jsonify({"status": "ok"}), 200
 
