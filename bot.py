@@ -69,14 +69,16 @@ def track_bot_user(user_id):
             return
         headers = sb_headers(True)
         headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
-        requests.post(
+        r = requests.post(
             f"{SUPABASE_URL}/rest/v1/bot_users",
             json={"user_id": uid},
             headers=headers,
-            timeout=3
+            timeout=4
         )
-    except Exception:
-        pass
+        if r.status_code not in [200, 201, 204]:
+            print(f"track_bot_user status {r.status_code}: {r.text}")
+    except Exception as e:
+        print(f"track_bot_user error: {e}")
 
 
 def record_channel_3_request(user_id):
@@ -249,7 +251,7 @@ def save_broadcast_delivery(batch_id, target_chat_id, delivered_msg_id):
     try:
         h = sb_headers(True)
         h["Prefer"] = "return=minimal"
-        requests.post(
+        r = requests.post(
             f"{SUPABASE_URL}/rest/v1/broadcast_logs",
             json={
                 "batch_id": batch_id,
@@ -259,6 +261,8 @@ def save_broadcast_delivery(batch_id, target_chat_id, delivered_msg_id):
             headers=h,
             timeout=4
         )
+        if r.status_code not in [200, 201, 204]:
+            print(f"Broadcast log status {r.status_code}: {r.text}")
     except Exception as e:
         print(f"Broadcast log save error: {e}")
 
@@ -664,14 +668,12 @@ def webhook(subpath=''):
                 answer_callback(cq["id"], "Sirf Owner aur Admin hi iska use kar sakte hain.", show_alert=True)
                 return jsonify({"status": "ok"}), 200
 
-            # Stop ongoing broadcast
             if data.startswith("bc_stop_"):
                 batch_key = data[len("bc_stop_"):]
                 ACTIVE_BROADCAST_CANCEL[batch_key] = True
                 answer_callback(cq["id"], "🛑 Broadcast rokne ka signal bhej diya gaya hai!", show_alert=True)
                 return jsonify({"status": "ok"}), 200
 
-            # Delete broadcast message from all delivered users
             if data.startswith("bc_del_"):
                 batch_key = data[len("bc_del_"):]
                 answer_callback(cq["id"], "🗑️ Sabhi users se message delete kiya ja raha hai...")
@@ -818,7 +820,6 @@ def webhook(subpath=''):
                 send_telegram_message(chat_id, "❌ Yeh command sirf Owner aur Admin hi use kar sakte hain!")
                 return jsonify({"status": "ok"}), 200
 
-            # 🚫 /ban <user_id> (Admin Only)
             if cmd_token == "/ban":
                 if len(parts) < 2:
                     send_telegram_message(chat_id, "⚠️ Use: `/ban <user_id>`")
@@ -836,7 +837,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # ✅ /unban <user_id> (Admin Only)
             if cmd_token == "/unban":
                 if len(parts) < 2:
                     send_telegram_message(chat_id, "⚠️ Use: `/unban <user_id>`")
@@ -849,7 +849,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 📜 /banlist (Admin Only)
             if cmd_token == "/banlist":
                 try:
                     res = requests.get(f"{SUPABASE_URL}/rest/v1/banned_users?select=user_id", headers=sb_headers(), timeout=5).json()
@@ -862,7 +861,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🏆 /leaderboard (Admin Only)
             if cmd_token == "/leaderboard":
                 try:
                     tokens = requests.get(f"{SUPABASE_URL}/rest/v1/episode_tokens?select=user_id,episode_id,uses", headers=sb_headers(), timeout=5).json()
@@ -904,7 +902,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Leaderboard error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔍 /check <anime_name> (Admin Only)
             if cmd_token == "/check":
                 query_anime = full_text.split(maxsplit=1)[1].strip().lower() if len(parts) > 1 else ""
                 if not query_anime:
@@ -922,7 +919,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Check error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔄 /replace <ep_id> <new_url> (Admin Only)
             if cmd_token == "/replace":
                 rep_parts = full_text.split(maxsplit=2)
                 if len(rep_parts) < 3:
@@ -942,7 +938,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 📣 /broadcast (Reply to a message -> Admin Only, with Stop, Stats & Delete-All)
             if cmd_token == "/broadcast":
                 reply_msg = msg.get("reply_to_message")
                 if not reply_msg:
@@ -975,6 +970,8 @@ def webhook(subpath=''):
                         uid_b = str(u.get("user_id", "")).strip()
                         if uid_b and uid_b not in user_ids:
                             user_ids.append(uid_b)
+                else:
+                    print(f"bot_users unexpected response: {users_res}")
 
                 total_users = len(user_ids)
                 successful = 0
@@ -1039,7 +1036,6 @@ def webhook(subpath=''):
 
                 return jsonify({"status": "ok"}), 200
 
-            # 🧹 /clear Command (Admin Only)
             if cmd_token == "/clear":
                 try:
                     get_url = f"{SUPABASE_URL}/rest/v1/sent_messages?select=chat_id,message_id"
@@ -1058,7 +1054,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Clear error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔗 /setepad Command (Admin Only)
             if cmd_token == "/setepad":
                 try:
                     sp_parts = full_text.split(maxsplit=2)
@@ -1098,7 +1093,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # ➕ /adduser Command (Admin Only)
             if cmd_token == "/adduser":
                 try:
                     au_parts = full_text.split(maxsplit=2)
@@ -1139,7 +1133,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Server error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 👥 /users Command (Admin Only)
             if cmd_token == "/users":
                 try:
                     txt, kb = build_users_list_view(chat_id)
@@ -1148,7 +1141,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error fetching users: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔗 /getlink Command (Admin Only)
             if cmd_token == "/getlink":
                 if len(parts) > 1:
                     ep_id = parts[1]
@@ -1161,7 +1153,6 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, "⚠️ Write: `/getlink ep_xxxx`")
                 return jsonify({"status": "ok"}), 200
 
-            # 📩 /report <issue> (Allowed for All Users -> Sends to Admins)
             if cmd_token == "/report":
                 report_body = full_text.split(maxsplit=1)[1].strip() if len(parts) > 1 else ""
                 if not report_body:
@@ -1177,7 +1168,6 @@ def webhook(subpath=''):
                 send_telegram_message(chat_id, "✅ Aapki report admin tak bhej di gayi hai. Dhanyawad!")
                 return jsonify({"status": "ok"}), 200
 
-            # 🎬 Episode Link Handling
             target_episode_id = None
             if "start=ep_" in full_text:
                 try:
@@ -1215,7 +1205,6 @@ def webhook(subpath=''):
                 deliver_episode_link(chat_id, user_id, target_episode_id)
                 return jsonify({"status": "ok"}), 200
 
-            # 👋 /start Command
             if cmd_token == "/start":
                 missing = get_missing_channels(user_id)
                 if missing:
