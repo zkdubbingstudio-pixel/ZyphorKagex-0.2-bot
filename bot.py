@@ -1,4 +1,5 @@
 import os
+import uuid
 import requests
 import threading
 from datetime import datetime, timedelta
@@ -48,6 +49,7 @@ USER_LIST_CACHE = {}
 USER_SUBS_CACHE = {}
 CHANNEL_3_REQUESTED_USERS = set()
 PENDING_EPISODE_CACHE = {}
+ACTIVE_BROADCAST_CANCEL = {}
 
 
 def sb_headers(json_body=False):
@@ -241,6 +243,35 @@ def answer_callback(callback_id, text="", show_alert=False):
         )
     except Exception as e:
         print(f"Answer callback error: {e}")
+
+
+def save_broadcast_delivery(batch_id, target_chat_id, delivered_msg_id):
+    try:
+        h = sb_headers(True)
+        h["Prefer"] = "return=minimal"
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/broadcast_logs",
+            json={
+                "batch_id": batch_id,
+                "chat_id": str(target_chat_id),
+                "message_id": int(delivered_msg_id)
+            },
+            headers=h,
+            timeout=4
+        )
+    except Exception as e:
+        print(f"Broadcast log save error: {e}")
+
+
+def format_broadcast_report(status_label, total, success, blocked, deleted_acc, unsuccessful):
+    return (
+        f"**Broadcast {status_label}**\n\n"
+        f"◇ Total Users: `{total}`\n"
+        f"◇ Successful: `{success}`\n"
+        f"◇ Blocked Users: `{blocked}`\n"
+        f"◇ Deleted Accounts: `{deleted_acc}`\n"
+        f"◇ Unsuccessful: `{unsuccessful}`"
+    )
 
 
 def get_telegram_user_label(user_id):
@@ -470,7 +501,6 @@ def is_single_channel_member(user_id, channel_id):
 
 
 def get_missing_channels(user_id):
-    """Return list of (label, url) for channels user has NOT joined / requested yet."""
     if user_id in ADMIN_IDS:
         return []
 
@@ -632,6 +662,43 @@ def webhook(subpath=''):
 
             if u_id not in ADMIN_IDS:
                 answer_callback(cq["id"], "Sirf Owner aur Admin hi iska use kar sakte hain.", show_alert=True)
+                return jsonify({"status": "ok"}), 200
+
+            # Stop ongoing broadcast
+            if data.startswith("bc_stop_"):
+                batch_key = data[len("bc_stop_"):]
+                ACTIVE_BROADCAST_CANCEL[batch_key] = True
+                answer_callback(cq["id"], "🛑 Broadcast rokne ka signal bhej diya gaya hai!", show_alert=True)
+                return jsonify({"status": "ok"}), 200
+
+            # Delete broadcast message from all delivered users
+            if data.startswith("bc_del_"):
+                batch_key = data[len("bc_del_"):]
+                answer_callback(cq["id"], "🗑️ Sabhi users se message delete kiya ja raha hai...")
+                deleted_msgs = 0
+                try:
+                    rows = requests.get(
+                        f"{SUPABASE_URL}/rest/v1/broadcast_logs?batch_id=eq.{batch_key}&select=id,chat_id,message_id",
+                        headers=sb_headers(),
+                        timeout=6
+                    ).json()
+                    if isinstance(rows, list):
+                        for r in rows:
+                            delete_telegram_message_now(r.get("chat_id"), r.get("message_id"))
+                            deleted_msgs += 1
+                        requests.delete(
+                            f"{SUPABASE_URL}/rest/v1/broadcast_logs?batch_id=eq.{batch_key}",
+                            headers=sb_headers(),
+                            timeout=5
+                        )
+                except Exception as e:
+                    print(f"Broadcast delete error: {e}")
+
+                edit_telegram_message(
+                    c_id,
+                    m_id,
+                    f"🗑️ **Broadcast Deleted From Users**\n\nTotal `{deleted_msgs}` user message(s) delete kiye gaye."
+                )
                 return jsonify({"status": "ok"}), 200
 
             if data.startswith("usr_"):
@@ -875,25 +942,101 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 📣 /broadcast <message> (Admin Only)
+            # 📣 /broadcast (Reply to a message -> Admin Only, with Stop, Stats & Delete-All)
             if cmd_token == "/broadcast":
-                b_msg = full_text.split(maxsplit=1)[1].strip() if len(parts) > 1 else ""
-                if not b_msg:
-                    send_telegram_message(chat_id, "⚠️ Use: `/broadcast <message>`")
+                reply_msg = msg.get("reply_to_message")
+                if not reply_msg:
+                    send_telegram_message(
+                        chat_id,
+                        "⚠️ Pehle apna message bhejein, fir **us message par reply karke** `/broadcast` likhein."
+                    )
                     return jsonify({"status": "ok"}), 200
-                try:
-                    users = requests.get(f"{SUPABASE_URL}/rest/v1/bot_users?select=user_id", headers=sb_headers(), timeout=5).json()
-                    sent_cnt = 0
-                    if isinstance(users, list):
-                        for u in users:
-                            uid_b = u.get("user_id")
-                            if uid_b:
-                                r = send_telegram_message(uid_b, f"📣 **Announcement**\n\n{b_msg}", track_for_delete=False)
-                                if r and r.get("ok"):
-                                    sent_cnt += 1
-                    send_telegram_message(chat_id, f"✅ Broadcast sent to `{sent_cnt}` user(s).")
-                except Exception as e:
-                    send_telegram_message(chat_id, f"❌ Broadcast error: {str(e)}")
+
+                reply_msg_id = reply_msg.get("message_id")
+                batch_id = uuid.uuid4().hex[:10]
+                ACTIVE_BROADCAST_CANCEL[batch_id] = False
+
+                status_resp = send_telegram_message(
+                    chat_id,
+                    "📣 **Broadcast Starting...**",
+                    reply_markup={
+                        "inline_keyboard": [
+                            [{"text": "🛑 Stop Broadcast", "callback_data": f"bc_stop_{batch_id}"}]
+                        ]
+                    },
+                    track_for_delete=False
+                )
+                status_msg_id = status_resp["result"]["message_id"] if status_resp and status_resp.get("ok") else None
+
+                users_res = requests.get(f"{SUPABASE_URL}/rest/v1/bot_users?select=user_id", headers=sb_headers(), timeout=5).json()
+                user_ids = []
+                if isinstance(users_res, list):
+                    for u in users_res:
+                        uid_b = str(u.get("user_id", "")).strip()
+                        if uid_b and uid_b not in user_ids:
+                            user_ids.append(uid_b)
+
+                total_users = len(user_ids)
+                successful = 0
+                blocked_users = 0
+                deleted_accounts = 0
+                unsuccessful = 0
+                was_cancelled = False
+
+                for uid_b in user_ids:
+                    if ACTIVE_BROADCAST_CANCEL.get(batch_id):
+                        was_cancelled = True
+                        break
+
+                    try:
+                        cp_res = requests.post(
+                            f"https://api.telegram.org/bot{BOT_TOKEN}/copyMessage",
+                            json={
+                                "chat_id": uid_b,
+                                "from_chat_id": chat_id,
+                                "message_id": reply_msg_id
+                            },
+                            timeout=5
+                        ).json()
+
+                        if cp_res.get("ok"):
+                            successful += 1
+                            delivered_mid = cp_res.get("result", {}).get("message_id")
+                            if delivered_mid is not None:
+                                save_broadcast_delivery(batch_id, uid_b, delivered_mid)
+                        else:
+                            err_code = cp_res.get("error_code", 0)
+                            desc = str(cp_res.get("description", "")).lower()
+                            if err_code == 403 or "blocked" in desc:
+                                blocked_users += 1
+                            elif "deactivated" in desc or "user is deactivated" in desc:
+                                deleted_accounts += 1
+                            else:
+                                unsuccessful += 1
+                    except Exception:
+                        unsuccessful += 1
+
+                ACTIVE_BROADCAST_CANCEL.pop(batch_id, None)
+                status_label = "cancelled" if was_cancelled else "complete"
+                report_text = format_broadcast_report(
+                    status_label,
+                    total_users,
+                    successful,
+                    blocked_users,
+                    deleted_accounts,
+                    unsuccessful
+                )
+                done_markup = {
+                    "inline_keyboard": [
+                        [{"text": "🗑️ Delete From All Users", "callback_data": f"bc_del_{batch_id}"}]
+                    ]
+                }
+
+                if status_msg_id:
+                    edit_telegram_message(chat_id, status_msg_id, report_text, done_markup)
+                else:
+                    send_telegram_message(chat_id, report_text, reply_markup=done_markup, track_for_delete=False)
+
                 return jsonify({"status": "ok"}), 200
 
             # 🧹 /clear Command (Admin Only)
