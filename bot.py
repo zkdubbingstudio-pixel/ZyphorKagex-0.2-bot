@@ -10,17 +10,44 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8934334004:AAESWVI3LqraM8eztb9tJldPOkzXGn0tI
 WEB_APP_DOMAIN = os.getenv("WEB_APP_DOMAIN", "https://kitsu-watch-zk.vercel.app")
 BOT_USERNAME = "Kitsu_zk_bot"
 
-CHANNEL_1 = "@zk_dubbing_studio"
-CHANNEL_2_LINK = "https://t.me/+H3TykxfXuwdlODNl"
+POSTER_URL = os.getenv(
+    "POSTER_URL",
+    "https://i.ibb.co/FbBPKwB1/photo-2026-11-20-04-31-24-7710106632994160668.jpg"
+)
+
+CHANNEL_1_ID = "@zk_dubbing_studio"
+CHANNEL_1_URL = "https://t.me/zk_dubbing_studio"
+
+CHANNEL_2_ID = "@IntheClearMoonlitDuskhindidub"
+CHANNEL_2_URL = "https://t.me/IntheClearMoonlitDuskhindidub"
+
+CHANNEL_3_ID = -1003927801868
+CHANNEL_3_URL = "https://t.me/+H3TykxfXuwdlODNl"
 
 ADMIN_IDS = [6144546817, 8528056660]
+
+ADMIN_ONLY_COMMANDS = (
+    "/ban",
+    "/unban",
+    "/banlist",
+    "/leaderboard",
+    "/check",
+    "/replace",
+    "/broadcast",
+    "/clear",
+    "/setepad",
+    "/adduser",
+    "/users",
+    "/getlink",
+)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://knefbynsdhgjuhlklyvu.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_tZxPCR45AXkjm73Fq81YAQ_VHEsGZVJ")
 
-# In-memory lookup for callback_data (< 64 bytes safe)
+# In-memory cache (plus Supabase fallback for request channel)
 USER_LIST_CACHE = {}
 USER_SUBS_CACHE = {}
+CHANNEL_3_REQUESTED_USERS = set()
 
 
 def sb_headers(json_body=False):
@@ -31,6 +58,74 @@ def sb_headers(json_body=False):
     if json_body:
         h["Content-Type"] = "application/json"
     return h
+
+
+def track_bot_user(user_id):
+    try:
+        uid = str(user_id).strip()
+        if not uid:
+            return
+        headers = sb_headers(True)
+        headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/bot_users",
+            json={"user_id": uid},
+            headers=headers,
+            timeout=3
+        )
+    except Exception:
+        pass
+
+
+def record_channel_3_request(user_id):
+    uid = str(user_id).strip()
+    if not uid:
+        return
+    CHANNEL_3_REQUESTED_USERS.add(uid)
+    try:
+        headers = sb_headers(True)
+        headers["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/channel_requests",
+            json={"user_id": uid, "channel_id": str(CHANNEL_3_ID)},
+            headers=headers,
+            timeout=3
+        )
+    except Exception:
+        pass
+
+
+def has_requested_channel_3(user_id):
+    uid = str(user_id).strip()
+    if uid in CHANNEL_3_REQUESTED_USERS:
+        return True
+    try:
+        res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/channel_requests?user_id=eq.{uid}&channel_id=eq.{CHANNEL_3_ID}&select=user_id",
+            headers=sb_headers(),
+            timeout=3
+        ).json()
+        if isinstance(res, list) and len(res) > 0:
+            CHANNEL_3_REQUESTED_USERS.add(uid)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def is_user_banned(user_id):
+    if user_id in ADMIN_IDS:
+        return False
+    try:
+        uid = str(user_id).strip()
+        res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/banned_users?user_id=eq.{uid}&select=user_id",
+            headers=sb_headers(),
+            timeout=4
+        ).json()
+        return isinstance(res, list) and len(res) > 0
+    except Exception:
+        return False
 
 
 def save_sent_message(chat_id, message_id):
@@ -94,6 +189,30 @@ def send_telegram_message(chat_id, text, reply_markup=None, track_for_delete=Tru
         return None
 
 
+def send_telegram_photo(chat_id, photo_url, caption, reply_markup=None, track_for_delete=True):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    payload = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+        "caption": caption,
+        "parse_mode": "Markdown",
+        "protect_content": True
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        response = requests.post(url, json=payload, timeout=8).json()
+        if response.get("ok"):
+            if track_for_delete:
+                msg_id = response["result"]["message_id"]
+                save_sent_message(chat_id, msg_id)
+            return response
+    except Exception as e:
+        print(f"Send photo error: {e}")
+
+    return send_telegram_message(chat_id, caption, reply_markup=reply_markup, track_for_delete=track_for_delete)
+
+
 def edit_telegram_message(chat_id, message_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     payload = {
@@ -125,7 +244,6 @@ def answer_callback(callback_id, text="", show_alert=False):
 
 
 def get_telegram_user_label(user_id):
-    """Fetch display name from Telegram if possible, else fallback to User ID."""
     uid_str = str(user_id).strip()
     if not uid_str.lstrip("-").isdigit():
         return uid_str
@@ -252,7 +370,6 @@ def build_user_history_view(admin_chat_id, user_idx):
     uid = user_ids[user_idx]
     label = get_telegram_user_label(uid)
 
-    # Fetch tokens opened/generated by this user
     tokens = []
     try:
         t_res = requests.get(
@@ -265,7 +382,6 @@ def build_user_history_view(admin_chat_id, user_idx):
     except Exception as e:
         print(f"Token history fetch error: {e}")
 
-    # Map episode_id -> anime_name
     ep_to_anime = {}
     try:
         ep_res = requests.get(
@@ -318,9 +434,10 @@ def get_join_keyboard(start_param=""):
     retry_url = f"https://t.me/{BOT_USERNAME}{start_param}"
     return {
         "inline_keyboard": [
-            [{"text": "📢 Join ZK Dubbing Studio", "url": "https://t.me/zk_dubbing_studio"}],
-            [{"text": "🛡️ Join Backup Channel", "url": CHANNEL_2_LINK}],
-            [{"text": "🔄 Joined / Try Again", "url": retry_url}]
+            [{"text": "📢 Join Channel 1 (@zk_dubbing_studio)", "url": CHANNEL_1_URL}],
+            [{"text": "🎬 Join Channel 2 (Moonlit Dusk)", "url": CHANNEL_2_URL}],
+            [{"text": "🔐 Send Join Request (Channel 3)", "url": CHANNEL_3_URL}],
+            [{"text": "🔄 Try Again / Joined", "url": retry_url}]
         ]
     }
 
@@ -371,7 +488,7 @@ def check_user_general_access(user_id):
     return False
 
 
-def is_user_member(user_id, channel_id):
+def is_single_channel_member(user_id, channel_id):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
         res = requests.get(url, params={"chat_id": channel_id, "user_id": user_id}, timeout=4).json()
@@ -379,8 +496,21 @@ def is_user_member(user_id, channel_id):
             status = res["result"].get("status", "")
             return status in ["creator", "administrator", "member", "restricted"] and res["result"].get("is_member", True)
     except Exception as e:
-        print(f"Member check error: {e}")
+        print(f"Member check error for {channel_id}: {e}")
     return False
+
+
+def has_joined_required_channels(user_id):
+    if user_id in ADMIN_IDS:
+        return True
+    if not is_single_channel_member(user_id, CHANNEL_1_ID):
+        return False
+    if not is_single_channel_member(user_id, CHANNEL_2_ID):
+        return False
+    # Channel 3 is a Join Request channel: pass if member OR request already sent
+    if not (is_single_channel_member(user_id, CHANNEL_3_ID) or has_requested_channel_3(user_id)):
+        return False
+    return True
 
 
 @app.route('/', methods=['GET'])
@@ -405,6 +535,15 @@ def webhook(subpath=''):
 
         threading.Thread(target=cleanup_expired_messages, daemon=True).start()
 
+        # Track Channel 3 Join Requests automatically
+        if "chat_join_request" in update:
+            cjr = update["chat_join_request"]
+            req_chat_id = cjr.get("chat", {}).get("id")
+            req_user_id = cjr.get("from", {}).get("id")
+            if req_chat_id == CHANNEL_3_ID and req_user_id:
+                record_channel_3_request(req_user_id)
+            return jsonify({"status": "ok"}), 200
+
         if "callback_query" in update:
             cq = update["callback_query"]
             c_id = cq["message"]["chat"]["id"]
@@ -413,7 +552,7 @@ def webhook(subpath=''):
             data = cq.get("data", "")
 
             if u_id not in ADMIN_IDS:
-                answer_callback(cq["id"], "Sirf admin hi iska use kar sakte hain.", show_alert=True)
+                answer_callback(cq["id"], "Sirf Owner aur Admin hi iska use kar sakte hain.", show_alert=True)
                 return jsonify({"status": "ok"}), 200
 
             if data.startswith("usr_"):
@@ -497,17 +636,24 @@ def webhook(subpath=''):
             msg = update["message"]
             chat_id = msg["chat"]["id"]
             user_id = msg["from"]["id"]
+            first_name = msg.get("from", {}).get("first_name", "Dost")
 
+            if is_user_banned(user_id):
+                return jsonify({"status": "ok"}), 200
+
+            track_bot_user(user_id)
+
+            # Jab bhi koi naya user channel/group mein aata hai
             if "new_chat_members" in msg:
                 for member in msg["new_chat_members"]:
                     if member.get("is_bot"):
                         continue
-                    first_name = member.get("first_name", "Dost")
-                    welcome_text = (
-                        f"👋 **Welcome, {first_name}!**\n\n"
-                        "Aage ke anime episodes aur updates ke liye hamare channels join karein:"
+                    m_name = member.get("first_name", "Dost")
+                    join_caption = (
+                        f"👋 **Welcome to ZK Dubbing Studio, {m_name}!**\n\n"
+                        "Aage ke episodes aur updates ke liye neeche diye gaye channels join karein:"
                     )
-                    send_telegram_message(chat_id, welcome_text, reply_markup=get_join_keyboard())
+                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard())
                 return jsonify({"status": "ok"}), 200
 
             text = msg.get("text", "").strip()
@@ -515,9 +661,160 @@ def webhook(subpath=''):
 
             full_text = text if text else caption
             parts = full_text.split()
+            cmd_token = parts[0].split("@")[0].lower() if parts else ""
 
-            # 🧹 /clear Command
-            if full_text.startswith("/clear") and user_id in ADMIN_IDS:
+            # Strict lock: Block non-admin users from all admin-only commands
+            if cmd_token in ADMIN_ONLY_COMMANDS and user_id not in ADMIN_IDS:
+                send_telegram_message(chat_id, "❌ Yeh command sirf Owner aur Admin hi use kar sakte hain!")
+                return jsonify({"status": "ok"}), 200
+
+            # 🚫 /ban <user_id> (Admin Only)
+            if cmd_token == "/ban":
+                if len(parts) < 2:
+                    send_telegram_message(chat_id, "⚠️ Use: `/ban <user_id>`")
+                    return jsonify({"status": "ok"}), 200
+                target_id = parts[1].strip()
+                try:
+                    h = sb_headers(True)
+                    h["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+                    resp = requests.post(f"{SUPABASE_URL}/rest/v1/banned_users", json={"user_id": target_id}, headers=h, timeout=5)
+                    if resp.status_code in [200, 201, 204]:
+                        send_telegram_message(chat_id, f"🚫 User `{target_id}` ko ban kar diya gaya hai.")
+                    else:
+                        send_telegram_message(chat_id, f"❌ Ban error: {resp.text}")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # ✅ /unban <user_id> (Admin Only)
+            if cmd_token == "/unban":
+                if len(parts) < 2:
+                    send_telegram_message(chat_id, "⚠️ Use: `/unban <user_id>`")
+                    return jsonify({"status": "ok"}), 200
+                target_id = parts[1].strip()
+                try:
+                    requests.delete(f"{SUPABASE_URL}/rest/v1/banned_users?user_id=eq.{target_id}", headers=sb_headers(), timeout=5)
+                    send_telegram_message(chat_id, f"✅ User `{target_id}` ko unban kar diya gaya hai.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 📜 /banlist (Admin Only)
+            if cmd_token == "/banlist":
+                try:
+                    res = requests.get(f"{SUPABASE_URL}/rest/v1/banned_users?select=user_id", headers=sb_headers(), timeout=5).json()
+                    if isinstance(res, list) and len(res) > 0:
+                        ids_txt = "\n".join([f"• `{r.get('user_id')}`" for r in res])
+                        send_telegram_message(chat_id, f"🚫 **Banned Users:**\n\n{ids_txt}")
+                    else:
+                        send_telegram_message(chat_id, "ℹ️ Koi banned user nahi hai.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 🏆 /leaderboard (Admin Only)
+            if cmd_token == "/leaderboard":
+                try:
+                    tokens = requests.get(f"{SUPABASE_URL}/rest/v1/episode_tokens?select=user_id,episode_id,uses", headers=sb_headers(), timeout=5).json()
+                    eps = requests.get(f"{SUPABASE_URL}/rest/v1/episodes?select=id,anime_name", headers=sb_headers(), timeout=5).json()
+                    ep_map = {str(e.get("id")): e.get("anime_name", "Unknown") for e in eps} if isinstance(eps, list) else {}
+
+                    anime_counts = {}
+                    user_counts = {}
+                    if isinstance(tokens, list):
+                        for t in tokens:
+                            u_cnt = int(t.get("uses") or 0)
+                            if u_cnt <= 0:
+                                continue
+                            aname = ep_map.get(str(t.get("episode_id")), "Unknown")
+                            uid_s = str(t.get("user_id", ""))
+                            anime_counts[aname] = anime_counts.get(aname, 0) + u_cnt
+                            if uid_s:
+                                user_counts[uid_s] = user_counts.get(uid_s, 0) + u_cnt
+
+                    top_animes = sorted(anime_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                    top_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+                    lb_msg = "🏆 **Leaderboard**\n\n**🔥 Top Animes (Opens):**\n"
+                    if top_animes:
+                        for i, (a, c) in enumerate(top_animes, 1):
+                            lb_msg += f"{i}. {a} — `{c}`\n"
+                    else:
+                        lb_msg += "No data yet.\n"
+
+                    lb_msg += "\n**👑 Top Active Users (Opens):**\n"
+                    if top_users:
+                        for i, (u, c) in enumerate(top_users, 1):
+                            lb_msg += f"{i}. `{u}` — `{c}`\n"
+                    else:
+                        lb_msg += "No data yet.\n"
+
+                    send_telegram_message(chat_id, lb_msg)
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Leaderboard error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 🔍 /check <anime_name> (Admin Only)
+            if cmd_token == "/check":
+                query_anime = full_text.split(maxsplit=1)[1].strip().lower() if len(parts) > 1 else ""
+                if not query_anime:
+                    send_telegram_message(chat_id, "⚠️ Use: `/check <anime_name>`")
+                    return jsonify({"status": "ok"}), 200
+                try:
+                    eps = requests.get(f"{SUPABASE_URL}/rest/v1/episodes?select=id,anime_name,episode_number", headers=sb_headers(), timeout=5).json()
+                    matched = [e for e in eps if query_anime in str(e.get("anime_name", "")).lower()] if isinstance(eps, list) else []
+                    if matched:
+                        lines = "\n".join([f"• `{m.get('id')}` — {m.get('anime_name')} (Ep {m.get('episode_number')})" for m in matched[:20]])
+                        send_telegram_message(chat_id, f"✅ **{len(matched)} Episode(s) Found:**\n\n{lines}")
+                    else:
+                        send_telegram_message(chat_id, f"❌ `{query_anime}` ke liye koi episode nahi mila.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Check error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 🔄 /replace <ep_id> <new_url> (Admin Only)
+            if cmd_token == "/replace":
+                rep_parts = full_text.split(maxsplit=2)
+                if len(rep_parts) < 3:
+                    send_telegram_message(chat_id, "⚠️ Use: `/replace <ep_id> <new_url>`")
+                    return jsonify({"status": "ok"}), 200
+                ep_id_rep = rep_parts[1].strip()
+                new_url_rep = rep_parts[2].strip()
+                try:
+                    h = sb_headers(True)
+                    h["Prefer"] = "return=minimal"
+                    resp = requests.patch(f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{ep_id_rep}", json={"video_url": new_url_rep}, headers=h, timeout=5)
+                    if resp.status_code in [200, 204]:
+                        send_telegram_message(chat_id, f"✅ Episode `{ep_id_rep}` ka link update ho gaya hai.")
+                    else:
+                        send_telegram_message(chat_id, f"❌ Update error: {resp.text}")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 📣 /broadcast <message> (Admin Only)
+            if cmd_token == "/broadcast":
+                b_msg = full_text.split(maxsplit=1)[1].strip() if len(parts) > 1 else ""
+                if not b_msg:
+                    send_telegram_message(chat_id, "⚠️ Use: `/broadcast <message>`")
+                    return jsonify({"status": "ok"}), 200
+                try:
+                    users = requests.get(f"{SUPABASE_URL}/rest/v1/bot_users?select=user_id", headers=sb_headers(), timeout=5).json()
+                    sent_cnt = 0
+                    if isinstance(users, list):
+                        for u in users:
+                            uid_b = u.get("user_id")
+                            if uid_b:
+                                r = send_telegram_message(uid_b, f"📣 **Announcement**\n\n{b_msg}", track_for_delete=False)
+                                if r and r.get("ok"):
+                                    sent_cnt += 1
+                    send_telegram_message(chat_id, f"✅ Broadcast sent to `{sent_cnt}` user(s).")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Broadcast error: {str(e)}")
+                return jsonify({"status": "ok"}), 200
+
+            # 🧹 /clear Command (Admin Only)
+            if cmd_token == "/clear":
                 try:
                     get_url = f"{SUPABASE_URL}/rest/v1/sent_messages?select=chat_id,message_id"
                     res = requests.get(get_url, headers=sb_headers(), timeout=5).json()
@@ -535,11 +832,11 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Clear error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            # 🔗 /setepad Command
-            if full_text.startswith("/setepad") and user_id in ADMIN_IDS:
+            # 🔗 /setepad Command (Admin Only)
+            if cmd_token == "/setepad":
                 try:
-                    parts = full_text.split(maxsplit=2)
-                    if len(parts) < 3:
+                    sp_parts = full_text.split(maxsplit=2)
+                    if len(sp_parts) < 3:
                         send_telegram_message(
                             chat_id,
                             "⚠️ Sahi format use karein:\n"
@@ -548,8 +845,8 @@ def webhook(subpath=''):
                         )
                         return jsonify({"status": "ok"}), 200
 
-                    raw_target = parts[1].strip()
-                    new_ad_link = parts[2].strip()
+                    raw_target = sp_parts[1].strip()
+                    new_ad_link = sp_parts[2].strip()
 
                     target_ep_id = ""
                     if "ep_" in raw_target:
@@ -575,17 +872,14 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            if full_text.startswith("/adduser"):
-                if user_id not in ADMIN_IDS:
-                    send_telegram_message(chat_id, "❌ Aap yeh command use nahi kar sakte!")
-                    return jsonify({"status": "ok"}), 200
-
+            # ➕ /adduser Command (Admin Only)
+            if cmd_token == "/adduser":
                 try:
-                    parts = full_text.split(maxsplit=2)
-                    if len(parts) < 3:
+                    au_parts = full_text.split(maxsplit=2)
+                    if len(au_parts) < 3:
                         raise ValueError("Invalid format")
 
-                    _, target_user_id, remaining = parts
+                    _, target_user_id, remaining = au_parts
                     rem_parts = remaining.rsplit(maxsplit=1)
                     if len(rem_parts) < 2:
                         raise ValueError("Invalid format")
@@ -619,10 +913,8 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Server error: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            if full_text.startswith("/users"):
-                if user_id not in ADMIN_IDS:
-                    return jsonify({"status": "ok"}), 200
-
+            # 👥 /users Command (Admin Only)
+            if cmd_token == "/users":
                 try:
                     txt, kb = build_users_list_view(chat_id)
                     send_telegram_message(chat_id, txt, reply_markup=kb)
@@ -630,7 +922,8 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, f"❌ Error fetching users: {str(e)}")
                 return jsonify({"status": "ok"}), 200
 
-            if full_text.startswith("/getlink") and user_id in ADMIN_IDS:
+            # 🔗 /getlink Command (Admin Only)
+            if cmd_token == "/getlink":
                 if len(parts) > 1:
                     ep_id = parts[1]
                     channel_post_link = f"https://t.me/{BOT_USERNAME}?start={ep_id}"
@@ -642,6 +935,23 @@ def webhook(subpath=''):
                     send_telegram_message(chat_id, "⚠️ Write: `/getlink ep_xxxx`")
                 return jsonify({"status": "ok"}), 200
 
+            # 📩 /report <issue> (Allowed for All Users -> Sends to Admins)
+            if cmd_token == "/report":
+                report_body = full_text.split(maxsplit=1)[1].strip() if len(parts) > 1 else ""
+                if not report_body:
+                    send_telegram_message(chat_id, "⚠️ Kripya apni issue likhein:\n`/report Episode 3 server 1 load nahi ho raha`")
+                    return jsonify({"status": "ok"}), 200
+                alert = (
+                    f"📩 **New User Report**\n"
+                    f"• **From:** {first_name} (`{user_id}`)\n"
+                    f"• **Issue:** {report_body}"
+                )
+                for adm in ADMIN_IDS:
+                    send_telegram_message(adm, alert, track_for_delete=False)
+                send_telegram_message(chat_id, "✅ Aapki report admin tak bhej di gayi hai. Dhanyawad!")
+                return jsonify({"status": "ok"}), 200
+
+            # 🎬 Episode Link Handling (All Users after joining channels)
             target_episode_id = None
             if "start=ep_" in full_text:
                 try:
@@ -649,7 +959,7 @@ def webhook(subpath=''):
                     target_episode_id = sub.split()[0].split("&")[0]
                 except Exception:
                     pass
-            elif len(parts) > 1 and parts[0] == "/start" and parts[1].startswith("ep_"):
+            elif len(parts) > 1 and cmd_token == "/start" and parts[1].startswith("ep_"):
                 target_episode_id = parts[1]
             else:
                 for part in parts:
@@ -662,16 +972,16 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                is_premium = check_user_anime_access(user_id, target_episode_id)
-
-                if not is_user_member(user_id, CHANNEL_1):
+                if not has_joined_required_channels(user_id):
                     retry_param = f"?start={target_episode_id}"
-                    send_telegram_message(
-                        chat_id,
-                        "✨ **Please Join Channel to Unlock Anime Links!**",
-                        reply_markup=get_join_keyboard(retry_param)
+                    join_caption = (
+                        f"👋 **Welcome to ZK Dubbing Studio, {first_name}!**\n\n"
+                        "Episode link unlock karne ke liye pehle neeche diye gaye channels join karein aur Channel 3 par join request bhejein:"
                     )
+                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard(retry_param))
                     return jsonify({"status": "ok"}), 200
+
+                is_premium = check_user_anime_access(user_id, target_episode_id)
 
                 if is_premium:
                     try:
@@ -743,24 +1053,22 @@ def webhook(subpath=''):
 
                 return jsonify({"status": "ok"}), 200
 
-            if full_text == "/start":
-                if not is_user_member(user_id, CHANNEL_1):
-                    send_telegram_message(
-                        chat_id,
-                        "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\n"
-                        "Pehle hamara channel join karein:",
-                        reply_markup=get_join_keyboard()
+            # 👋 /start Command (Allowed for All Users)
+            if cmd_token == "/start":
+                if not has_joined_required_channels(user_id):
+                    join_caption = (
+                        f"👋 **Welcome to ZK Dubbing Studio, {first_name}!**\n\n"
+                        "Aage badhne ke liye neeche diye gaye sabhi channels join karein aur Channel 3 par join request bhejein:"
                     )
+                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard())
                     return jsonify({"status": "ok"}), 200
 
-                if not check_user_general_access(user_id):
-                    send_telegram_message(
-                        chat_id,
-                        "⚠️ Aap anime stream nhi kar sakte aapko hamre premium lena hoga.\n\n"
-                        "Premium lene ke liye yha pe message/dm karo :- @zk\\_studio\\_owner"
-                    )
-                else:
-                    send_telegram_message(chat_id, "👋 **Welcome to Kitsu (キツ) - ZK Dubbing Studio!**\n\nAapko anime episodes ke liye channel par di gayi links par click karna hoga.")
+                welcome_caption = (
+                    f"👋 **Welcome to ZK Dubbing Studio, {first_name}!**\n\n"
+                    "@zk\\_dubbing\\_studio — is channel par hamare jitne anime dub kiye hain, "
+                    "woh aap watch aur download kar sakte hain."
+                )
+                send_telegram_photo(chat_id, POSTER_URL, welcome_caption)
 
     except Exception as e:
         print(f"Webhook error: {e}")
