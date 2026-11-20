@@ -44,10 +44,10 @@ ADMIN_ONLY_COMMANDS = (
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://knefbynsdhgjuhlklyvu.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_tZxPCR45AXkjm73Fq81YAQ_VHEsGZVJ")
 
-# In-memory cache (plus Supabase fallback for request channel)
 USER_LIST_CACHE = {}
 USER_SUBS_CACHE = {}
 CHANNEL_3_REQUESTED_USERS = set()
+PENDING_EPISODE_CACHE = {}
 
 
 def sb_headers(json_body=False):
@@ -430,18 +430,6 @@ def build_user_history_view(admin_chat_id, user_idx):
     return text_msg, keyboard
 
 
-def get_join_keyboard(start_param=""):
-    retry_url = f"https://t.me/{BOT_USERNAME}{start_param}"
-    return {
-        "inline_keyboard": [
-            [{"text": "📢 Join Channel 1 (@zk_dubbing_studio)", "url": CHANNEL_1_URL}],
-            [{"text": "🎬 Join Channel 2 (Moonlit Dusk)", "url": CHANNEL_2_URL}],
-            [{"text": "🔐 Send Join Request (Channel 3)", "url": CHANNEL_3_URL}],
-            [{"text": "🔄 Try Again / Joined", "url": retry_url}]
-        ]
-    }
-
-
 def check_user_anime_access(user_id, episode_id):
     if user_id in ADMIN_IDS:
         return True
@@ -469,25 +457,6 @@ def check_user_anime_access(user_id, episode_id):
     return False
 
 
-def check_user_general_access(user_id):
-    if user_id in ADMIN_IDS:
-        return True
-    try:
-        url = f"{SUPABASE_URL}/rest/v1/user_subscriptions?user_id=eq.{user_id}"
-        res = requests.get(url, headers=sb_headers(), timeout=5).json()
-        if isinstance(res, list):
-            now = datetime.utcnow()
-            for sub in res:
-                expiry_str = sub.get("expires_at", "").replace("Z", "")
-                if expiry_str:
-                    expiry = datetime.fromisoformat(expiry_str)
-                    if expiry > now:
-                        return True
-    except Exception as e:
-        print(f"General access check error: {e}")
-    return False
-
-
 def is_single_channel_member(user_id, channel_id):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getChatMember"
@@ -500,17 +469,99 @@ def is_single_channel_member(user_id, channel_id):
     return False
 
 
-def has_joined_required_channels(user_id):
+def get_missing_channels(user_id):
+    """Return list of (label, url) for channels user has NOT joined / requested yet."""
     if user_id in ADMIN_IDS:
-        return True
+        return []
+
+    missing = []
     if not is_single_channel_member(user_id, CHANNEL_1_ID):
-        return False
+        missing.append(("📢 Channel 1", CHANNEL_1_URL))
     if not is_single_channel_member(user_id, CHANNEL_2_ID):
-        return False
-    # Channel 3 is a Join Request channel: pass if member OR request already sent
+        missing.append(("🎬 Channel 2", CHANNEL_2_URL))
     if not (is_single_channel_member(user_id, CHANNEL_3_ID) or has_requested_channel_3(user_id)):
-        return False
-    return True
+        missing.append(("🔐 Channel 3", CHANNEL_3_URL))
+    return missing
+
+
+def build_dynamic_join_keyboard(user_id, episode_id=None):
+    missing = get_missing_channels(user_id)
+    rows = [[{"text": label, "url": url}] for label, url in missing]
+    if episode_id:
+        PENDING_EPISODE_CACHE[str(user_id)] = episode_id
+    rows.append([{"text": "🔄 Try Again", "callback_data": "chk_join"}])
+    return {"inline_keyboard": rows}
+
+
+def deliver_episode_link(chat_id, user_id, target_episode_id):
+    is_premium = check_user_anime_access(user_id, target_episode_id)
+    if is_premium:
+        try:
+            api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
+            res = requests.get(api_url, timeout=15).json()
+
+            if res.get("success"):
+                token = res.get("token")
+                watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
+
+                keyboard = {
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "▶️ Watch Anime Now (Ad-Free)",
+                                "web_app": {"url": watch_url}
+                            }
+                        ]
+                    ]
+                }
+
+                msg_text = (
+                    "🎬 **Kitsu Player Ready (Premium - No Ads)!**\n\n"
+                    "• Aapke paas active premium hai, isliye yeh link bilkul ad-free hai."
+                )
+                send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
+            else:
+                send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
+        except Exception as e:
+            send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
+    else:
+        episode_ad_link = "https://shrinkme.click/default"
+        try:
+            ep_query_res = requests.get(
+                f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{target_episode_id}&select=ad_link",
+                headers=sb_headers(),
+                timeout=5
+            ).json()
+            if isinstance(ep_query_res, list) and len(ep_query_res) > 0:
+                db_link = ep_query_res[0].get("ad_link")
+                if db_link:
+                    episode_ad_link = db_link
+        except Exception as e:
+            print(f"Fetch episode ad link error: {e}")
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "🔗 Watch via Ads (Protected Link)",
+                        "url": episode_ad_link
+                    }
+                ],
+                [
+                    {
+                        "text": "💎 Buy Premium (Remove Ads)",
+                        "url": "https://t.me/zk_studio_owner"
+                    }
+                ]
+            ]
+        }
+
+        msg_text = (
+            "🎬 **Free Episode Link (With Ads):**\n\n"
+            "• Aapne premium nahi liya hai, isliye is episode ki ad-protected link niche di gayi hai.\n"
+            "• Ads cross karke episode dekhein!"
+        )
+        send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
 
 
 @app.route('/', methods=['GET'])
@@ -535,7 +586,6 @@ def webhook(subpath=''):
 
         threading.Thread(target=cleanup_expired_messages, daemon=True).start()
 
-        # Track Channel 3 Join Requests automatically
         if "chat_join_request" in update:
             cjr = update["chat_join_request"]
             req_chat_id = cjr.get("chat", {}).get("id")
@@ -549,7 +599,36 @@ def webhook(subpath=''):
             c_id = cq["message"]["chat"]["id"]
             m_id = cq["message"]["message_id"]
             u_id = cq["from"]["id"]
+            u_first = cq.get("from", {}).get("first_name", "Dost")
             data = cq.get("data", "")
+
+            if data == "chk_join":
+                missing = get_missing_channels(u_id)
+                if not missing:
+                    delete_telegram_message_now(c_id, m_id)
+                    answer_callback(cq["id"], "✅ Sabhi channels verify ho gaye!")
+                    ep_id = PENDING_EPISODE_CACHE.pop(str(u_id), None)
+                    if ep_id:
+                        deliver_episode_link(c_id, u_id, ep_id)
+                    else:
+                        welcome_caption = (
+                            f"👋 **Welcome to ZK Dubbing Studio, {u_first}!**\n\n"
+                            "@zk\\_dubbing\\_studio — is channel par hamare jitne anime dub kiye hain, "
+                            "woh aap watch aur download kar sakte hain."
+                        )
+                        send_telegram_photo(c_id, POSTER_URL, welcome_caption)
+                else:
+                    answer_callback(cq["id"], "⚠️ Abhi kuch channel join karna baaki hai!", show_alert=True)
+                    updated_kb = build_dynamic_join_keyboard(u_id, PENDING_EPISODE_CACHE.get(str(u_id)))
+                    try:
+                        requests.post(
+                            f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageReplyMarkup",
+                            json={"chat_id": c_id, "message_id": m_id, "reply_markup": updated_kb},
+                            timeout=4
+                        )
+                    except Exception:
+                        pass
+                return jsonify({"status": "ok"}), 200
 
             if u_id not in ADMIN_IDS:
                 answer_callback(cq["id"], "Sirf Owner aur Admin hi iska use kar sakte hain.", show_alert=True)
@@ -643,17 +722,22 @@ def webhook(subpath=''):
 
             track_bot_user(user_id)
 
-            # Jab bhi koi naya user channel/group mein aata hai
             if "new_chat_members" in msg:
                 for member in msg["new_chat_members"]:
                     if member.get("is_bot"):
                         continue
+                    m_uid = member.get("id")
                     m_name = member.get("first_name", "Dost")
                     join_caption = (
                         f"👋 **Welcome to ZK Dubbing Studio, {m_name}!**\n\n"
                         "Aage ke episodes aur updates ke liye neeche diye gaye channels join karein:"
                     )
-                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard())
+                    send_telegram_photo(
+                        chat_id,
+                        POSTER_URL,
+                        join_caption,
+                        reply_markup=build_dynamic_join_keyboard(m_uid)
+                    )
                 return jsonify({"status": "ok"}), 200
 
             text = msg.get("text", "").strip()
@@ -663,7 +747,6 @@ def webhook(subpath=''):
             parts = full_text.split()
             cmd_token = parts[0].split("@")[0].lower() if parts else ""
 
-            # Strict lock: Block non-admin users from all admin-only commands
             if cmd_token in ADMIN_ONLY_COMMANDS and user_id not in ADMIN_IDS:
                 send_telegram_message(chat_id, "❌ Yeh command sirf Owner aur Admin hi use kar sakte hain!")
                 return jsonify({"status": "ok"}), 200
@@ -951,7 +1034,7 @@ def webhook(subpath=''):
                 send_telegram_message(chat_id, "✅ Aapki report admin tak bhej di gayi hai. Dhanyawad!")
                 return jsonify({"status": "ok"}), 200
 
-            # 🎬 Episode Link Handling (All Users after joining channels)
+            # 🎬 Episode Link Handling
             target_episode_id = None
             if "start=ep_" in full_text:
                 try:
@@ -972,95 +1055,37 @@ def webhook(subpath=''):
                             break
 
             if target_episode_id:
-                if not has_joined_required_channels(user_id):
-                    retry_param = f"?start={target_episode_id}"
+                missing = get_missing_channels(user_id)
+                if missing:
                     join_caption = (
                         f"👋 **Welcome to ZK Dubbing Studio, {first_name}!**\n\n"
-                        "Episode link unlock karne ke liye pehle neeche diye gaye channels join karein aur Channel 3 par join request bhejein:"
+                        "Episode link unlock karne ke liye pehle neeche diye gaye channels join karein:"
                     )
-                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard(retry_param))
+                    send_telegram_photo(
+                        chat_id,
+                        POSTER_URL,
+                        join_caption,
+                        reply_markup=build_dynamic_join_keyboard(user_id, target_episode_id)
+                    )
                     return jsonify({"status": "ok"}), 200
 
-                is_premium = check_user_anime_access(user_id, target_episode_id)
-
-                if is_premium:
-                    try:
-                        api_url = f"{WEB_APP_DOMAIN}/api/get-watch-token?episodeId={target_episode_id}&userId={user_id}"
-                        res = requests.get(api_url, timeout=15).json()
-
-                        if res.get("success"):
-                            token = res.get("token")
-                            watch_url = f"{WEB_APP_DOMAIN}/watch.html?token={token}"
-
-                            keyboard = {
-                                "inline_keyboard": [
-                                    [
-                                        {
-                                            "text": "▶️ Watch Anime Now (Ad-Free)",
-                                            "web_app": {"url": watch_url}
-                                        }
-                                    ]
-                                ]
-                            }
-
-                            msg_text = (
-                                "🎬 **Kitsu Player Ready (Premium - No Ads)!**\n\n"
-                                "• Aapke paas active premium hai, isliye yeh link bilkul ad-free hai."
-                            )
-                            send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
-                        else:
-                            send_telegram_message(chat_id, f"❌ Error: {res.get('message', 'Episode database mein nahi mila.')}")
-                    except Exception as e:
-                        send_telegram_message(chat_id, f"❌ Server connection error: {str(e)}")
-                else:
-                    episode_ad_link = "https://shrinkme.click/default"
-                    try:
-                        ep_query_res = requests.get(
-                            f"{SUPABASE_URL}/rest/v1/episodes?id=eq.{target_episode_id}&select=ad_link",
-                            headers=sb_headers(),
-                            timeout=5
-                        ).json()
-                        if isinstance(ep_query_res, list) and len(ep_query_res) > 0:
-                            db_link = ep_query_res[0].get("ad_link")
-                            if db_link:
-                                episode_ad_link = db_link
-                    except Exception as e:
-                        print(f"Fetch episode ad link error: {e}")
-
-                    keyboard = {
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": "🔗 Watch via Ads (Protected Link)",
-                                    "url": episode_ad_link
-                                }
-                            ],
-                            [
-                                {
-                                    "text": "💎 Buy Premium (Remove Ads)",
-                                    "url": "https://t.me/zk_studio_owner"
-                                }
-                            ]
-                        ]
-                    }
-
-                    msg_text = (
-                        "🎬 **Free Episode Link (With Ads):**\n\n"
-                        "• Aapne premium nahi liya hai, isliye is episode ki ad-protected link niche di gayi hai.\n"
-                        "• Ads cross karke episode dekhein!"
-                    )
-                    send_telegram_message(chat_id, msg_text, reply_markup=keyboard)
-
+                deliver_episode_link(chat_id, user_id, target_episode_id)
                 return jsonify({"status": "ok"}), 200
 
-            # 👋 /start Command (Allowed for All Users)
+            # 👋 /start Command
             if cmd_token == "/start":
-                if not has_joined_required_channels(user_id):
+                missing = get_missing_channels(user_id)
+                if missing:
                     join_caption = (
                         f"👋 **Welcome to ZK Dubbing Studio, {first_name}!**\n\n"
-                        "Aage badhne ke liye neeche diye gaye sabhi channels join karein aur Channel 3 par join request bhejein:"
+                        "Aage badhne ke liye neeche diye gaye channels join karein:"
                     )
-                    send_telegram_photo(chat_id, POSTER_URL, join_caption, reply_markup=get_join_keyboard())
+                    send_telegram_photo(
+                        chat_id,
+                        POSTER_URL,
+                        join_caption,
+                        reply_markup=build_dynamic_join_keyboard(user_id)
+                    )
                     return jsonify({"status": "ok"}), 200
 
                 welcome_caption = (
